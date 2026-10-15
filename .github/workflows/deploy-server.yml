@@ -17,14 +17,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
 
-    env:
-      VPS_HOST: "163.61.182.214"
-      VPS_USER: "root"
-      VPS_PORT: "22"
-
     steps:
       # =====================================================
-      # CHECKOUT
+      # CHECKOUT REPOSITORY
       # =====================================================
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -38,89 +33,22 @@ jobs:
           sudo apt-get install -y sshpass
 
       # =====================================================
-      # TEST VPS TCP CONNECTION
-      # =====================================================
-      - name: Test VPS SSH port
-        run: |
-          set -Eeuo pipefail
-
-          echo "======================================"
-          echo "CHECK VPS SSH CONNECTIVITY"
-          echo "======================================"
-
-          echo "Host: $VPS_HOST"
-          echo "Port: $VPS_PORT"
-
-          if timeout 20 bash -c \
-            'echo > /dev/tcp/$1/$2' \
-            _ "$VPS_HOST" "$VPS_PORT"
-          then
-            echo "SSH port is reachable."
-          else
-            echo "Cannot connect to VPS SSH port."
-            echo "Check VPS IP, SSH port and firewall."
-            exit 1
-          fi
-
-      # =====================================================
-      # CONFIGURE SSH HOST KEY
-      # =====================================================
-      - name: Configure SSH known hosts
-        run: |
-          set -Eeuo pipefail
-
-          mkdir -p "$HOME/.ssh"
-          chmod 700 "$HOME/.ssh"
-
-          ssh-keyscan \
-            -T 20 \
-            -p "$VPS_PORT" \
-            -H "$VPS_HOST" \
-            >> "$HOME/.ssh/known_hosts"
-
-          chmod 600 "$HOME/.ssh/known_hosts"
-
-          echo "SSH known_hosts configured."
-
-      # =====================================================
-      # TEST SSH AUTHENTICATION
-      # =====================================================
-      - name: Test SSH authentication
-        env:
-          SSH_PASSWORD: ${{ secrets.VPS_SSH_PASSWORD }}
-        run: |
-          set -Eeuo pipefail
-
-          echo "======================================"
-          echo "TEST SSH AUTHENTICATION"
-          echo "======================================"
-
-          sshpass -p "$SSH_PASSWORD" ssh \
-            -p "$VPS_PORT" \
-            -o StrictHostKeyChecking=yes \
-            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
-            -o ConnectTimeout=30 \
-            -o ServerAliveInterval=15 \
-            -o ServerAliveCountMax=3 \
-            "$VPS_USER@$VPS_HOST" \
-            'echo SSH_CONNECTION_SUCCESS'
-
-      # =====================================================
-      # DEPLOY
+      # DEPLOY TO VPS
       # =====================================================
       - name: Deploy Sat Hach
         env:
-          SSH_PASSWORD: ${{ secrets.VPS_SSH_PASSWORD }}
+          VPS_HOST: 163.61.182.214
+          VPS_USER: root
+          VPS_PORT: "22"
+          VPS_PASS: ${{ secrets.VPS_SSH_PASSWORD }}
+
         run: |
           set -Eeuo pipefail
 
-          sshpass -p "$SSH_PASSWORD" ssh \
+          sshpass -p "$VPS_PASS" ssh \
             -p "$VPS_PORT" \
-            -o StrictHostKeyChecking=yes \
-            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+            -o StrictHostKeyChecking=no \
             -o ConnectTimeout=30 \
-            -o ServerAliveInterval=15 \
-            -o ServerAliveCountMax=3 \
             "$VPS_USER@$VPS_HOST" \
             'bash -se' <<'REMOTE'
 
@@ -129,7 +57,7 @@ jobs:
           # =================================================
           # CONFIGURATION
           # =================================================
-          PROJECT_DIR="/root/sat-hach-platform-"
+          PROJECT_DIR="/root/sat-hach-platform"
           BRANCH="main"
           COMPOSE_FILE="docker-compose.server.yml"
           ENV_FILE=".env.server"
@@ -157,14 +85,13 @@ jobs:
           # =================================================
           on_error() {
             EXIT_CODE=$?
-
             trap - ERR
 
             echo ""
-            echo "======================================"
+            echo "========================================"
             echo "SAT HACH DEPLOY FAILED"
             echo "Exit code: $EXIT_CODE"
-            echo "======================================"
+            echo "========================================"
 
             if [ -d "$PROJECT_DIR" ]; then
               cd "$PROJECT_DIR" || true
@@ -195,21 +122,24 @@ jobs:
             fi
 
             echo ""
-            echo "Existing Docker volumes are preserved."
-            echo "Other projects are not stopped."
+            echo "Database volumes are preserved."
+            echo "Other projects remain untouched."
 
             exit "$EXIT_CODE"
           }
 
           trap on_error ERR
 
+          # =================================================
+          # START DEPLOY
+          # =================================================
           echo ""
-          echo "======================================"
+          echo "========================================"
           echo "DEPLOY SAT HACH PLATFORM"
-          echo "======================================"
+          echo "========================================"
 
           # =================================================
-          # CHECK PROJECT
+          # CHECK PROJECT DIRECTORY
           # =================================================
           echo ""
           echo "==> Checking project directory"
@@ -301,36 +231,33 @@ jobs:
 
           compose config --quiet
 
+          echo "Docker Compose configuration OK."
+
+          # =================================================
+          # CHECK REQUIRED SERVICES
+          # =================================================
+          echo ""
+          echo "==> Checking Docker Compose services"
+
           SERVICES="$(compose --profile tools config --services)"
 
           for SERVICE in postgres redis migrate api web
           do
             echo "$SERVICES" | grep -qx "$SERVICE" || {
-              echo "Missing Docker service: $SERVICE"
+              echo "Missing service: $SERVICE"
               exit 1
             }
           done
 
-          echo "Docker Compose configuration OK."
+          echo "All required services found."
 
           # =================================================
-          # VERIFY REQUIRED PORTS
+          # BUILD APPLICATION IMAGE
           # =================================================
           echo ""
-          echo "==> Checking Docker port configuration"
-
-          echo "API public port: 8000"
-          echo "Web public port: 8001"
-          echo "PostgreSQL host port: 18003 (localhost only)"
-          echo "Redis host port: 18002 (localhost only)"
-
-          # =================================================
-          # BUILD DOCKER IMAGE
-          # =================================================
-          echo ""
-          echo "======================================"
-          echo "BUILD APPLICATION DOCKER IMAGE"
-          echo "======================================"
+          echo "========================================"
+          echo "BUILD SAT HACH DOCKER IMAGE"
+          echo "========================================"
 
           compose build api
 
@@ -341,9 +268,9 @@ jobs:
           # START POSTGRESQL AND REDIS
           # =================================================
           echo ""
-          echo "======================================"
+          echo "========================================"
           echo "START SAT HACH POSTGRESQL + REDIS"
-          echo "======================================"
+          echo "========================================"
 
           compose up -d --wait postgres redis
 
@@ -370,9 +297,9 @@ jobs:
           # RUN MIGRATIONS
           # =================================================
           echo ""
-          echo "======================================"
+          echo "========================================"
           echo "DATABASE MIGRATIONS"
-          echo "======================================"
+          echo "========================================"
 
           compose run --rm -T migrate </dev/null
 
@@ -380,12 +307,12 @@ jobs:
           echo "Database migrations completed."
 
           # =================================================
-          # START API + WEB
+          # START API AND WEB
           # =================================================
           echo ""
-          echo "======================================"
-          echo "START API + WEB"
-          echo "======================================"
+          echo "========================================"
+          echo "START SAT HACH API + WEB"
+          echo "========================================"
 
           compose up -d --no-build api web
 
@@ -446,12 +373,12 @@ jobs:
           }
 
           # =================================================
-          # WAIT FOR API
+          # API HEALTH CHECK
           # =================================================
           echo ""
-          echo "======================================"
+          echo "========================================"
           echo "API HEALTH CHECK"
-          echo "======================================"
+          echo "========================================"
 
           wait_http \
             "Sat Hach API" \
@@ -459,12 +386,12 @@ jobs:
             "$API_CONTAINER"
 
           # =================================================
-          # WAIT FOR WEB
+          # WEB HEALTH CHECK
           # =================================================
           echo ""
-          echo "======================================"
+          echo "========================================"
           echo "WEB HEALTH CHECK"
-          echo "======================================"
+          echo "========================================"
 
           wait_http \
             "Sat Hach Web" \
@@ -475,9 +402,9 @@ jobs:
           # FINAL CONTAINER CHECK
           # =================================================
           echo ""
-          echo "======================================"
+          echo "========================================"
           echo "FINAL CONTAINER CHECK"
-          echo "======================================"
+          echo "========================================"
 
           for CONTAINER in \
             "$DB_CONTAINER" \
@@ -509,10 +436,10 @@ jobs:
           compose ps -a
 
           # =================================================
-          # CLEANUP
+          # CLEANUP DANGLING IMAGES
           # =================================================
           echo ""
-          echo "==> Cleaning dangling images"
+          echo "==> Cleaning dangling Docker images"
 
           docker image prune -f
 
@@ -522,9 +449,9 @@ jobs:
           trap - ERR
 
           echo ""
-          echo "======================================"
+          echo "========================================"
           echo "SAT HACH DEPLOY SUCCESS"
-          echo "======================================"
+          echo "========================================"
 
           echo ""
           echo "Web Admin:"
