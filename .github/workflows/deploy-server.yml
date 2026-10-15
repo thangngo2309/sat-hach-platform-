@@ -57,7 +57,7 @@ jobs:
           # =================================================
           # CONFIGURATION
           # =================================================
-          PROJECT_DIR="/root/sat-hach-platform"
+          PROJECT_DIR="/root/sat-hach-platform-"
           BRANCH="main"
           COMPOSE_FILE="docker-compose.server.yml"
           ENV_FILE=".env.server"
