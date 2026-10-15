@@ -1,10 +1,10 @@
-
 name: Deploy Sat Hach Server
 
 on:
   push:
     branches:
       - main
+
   workflow_dispatch:
 
 concurrency:
@@ -23,11 +23,48 @@ jobs:
       VPS_PORT: "22"
 
     steps:
+      # =====================================================
+      # CHECKOUT
+      # =====================================================
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # =====================================================
+      # INSTALL SSHPASS
+      # =====================================================
       - name: Install sshpass
         run: |
           sudo apt-get update
           sudo apt-get install -y sshpass
 
+      # =====================================================
+      # TEST VPS TCP CONNECTION
+      # =====================================================
+      - name: Test VPS SSH port
+        run: |
+          set -Eeuo pipefail
+
+          echo "======================================"
+          echo "CHECK VPS SSH CONNECTIVITY"
+          echo "======================================"
+
+          echo "Host: $VPS_HOST"
+          echo "Port: $VPS_PORT"
+
+          if timeout 20 bash -c \
+            'echo > /dev/tcp/$1/$2' \
+            _ "$VPS_HOST" "$VPS_PORT"
+          then
+            echo "SSH port is reachable."
+          else
+            echo "Cannot connect to VPS SSH port."
+            echo "Check VPS IP, SSH port and firewall."
+            exit 1
+          fi
+
+      # =====================================================
+      # CONFIGURE SSH HOST KEY
+      # =====================================================
       - name: Configure SSH known hosts
         run: |
           set -Eeuo pipefail
@@ -36,15 +73,44 @@ jobs:
           chmod 700 "$HOME/.ssh"
 
           ssh-keyscan \
+            -T 20 \
             -p "$VPS_PORT" \
             -H "$VPS_HOST" \
             >> "$HOME/.ssh/known_hosts"
 
           chmod 600 "$HOME/.ssh/known_hosts"
 
-      - name: Deploy
+          echo "SSH known_hosts configured."
+
+      # =====================================================
+      # TEST SSH AUTHENTICATION
+      # =====================================================
+      - name: Test SSH authentication
         env:
-          SSH_PASSWORD: ${{ secrets.VPS_SSH_PASSWORD }}
+          SSH_PASSWORD: ${{ secrets.DEV_SSH_PASSWORD }}
+        run: |
+          set -Eeuo pipefail
+
+          echo "======================================"
+          echo "TEST SSH AUTHENTICATION"
+          echo "======================================"
+
+          sshpass -p "$SSH_PASSWORD" ssh \
+            -p "$VPS_PORT" \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+            -o ConnectTimeout=30 \
+            -o ServerAliveInterval=15 \
+            -o ServerAliveCountMax=3 \
+            "$VPS_USER@$VPS_HOST" \
+            'echo SSH_CONNECTION_SUCCESS'
+
+      # =====================================================
+      # DEPLOY
+      # =====================================================
+      - name: Deploy Sat Hach
+        env:
+          SSH_PASSWORD: ${{ secrets.DEV_SSH_PASSWORD }}
         run: |
           set -Eeuo pipefail
 
@@ -52,17 +118,33 @@ jobs:
             -p "$VPS_PORT" \
             -o StrictHostKeyChecking=yes \
             -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
-            -o ConnectTimeout=20 \
+            -o ConnectTimeout=30 \
+            -o ServerAliveInterval=15 \
+            -o ServerAliveCountMax=3 \
             "$VPS_USER@$VPS_HOST" \
             'bash -se' <<'REMOTE'
 
           set -Eeuo pipefail
 
-          PROJECT_DIR="/root/sat-hach-platform"
+          # =================================================
+          # CONFIGURATION
+          # =================================================
+          PROJECT_DIR="/root/sat-hach-platform-"
           BRANCH="main"
           COMPOSE_FILE="docker-compose.server.yml"
           ENV_FILE=".env.server"
 
+          API_CONTAINER="sathach-api"
+          WEB_CONTAINER="sathach-web"
+          DB_CONTAINER="sathach-postgres"
+          REDIS_CONTAINER="sathach-redis"
+
+          API_PORT=8000
+          WEB_PORT=8001
+
+          # =================================================
+          # DOCKER COMPOSE HELPER
+          # =================================================
           compose() {
             docker compose \
               --env-file "$ENV_FILE" \
@@ -70,186 +152,386 @@ jobs:
               "$@"
           }
 
+          # =================================================
+          # ERROR HANDLER
+          # =================================================
           on_error() {
-            status=$?
+            EXIT_CODE=$?
+
             trap - ERR
 
             echo ""
-            echo "========================================"
+            echo "======================================"
             echo "SAT HACH DEPLOY FAILED"
-            echo "Exit status: $status"
-            echo "========================================"
+            echo "Exit code: $EXIT_CODE"
+            echo "======================================"
 
             if [ -d "$PROJECT_DIR" ]; then
               cd "$PROJECT_DIR" || true
 
               if [ -f "$ENV_FILE" ] && [ -f "$COMPOSE_FILE" ]; then
+
+                echo ""
+                echo "==> Docker Compose status"
                 compose ps -a || true
 
+                echo ""
                 echo "==> API logs"
                 compose logs --tail=150 api || true
 
+                echo ""
                 echo "==> Web logs"
                 compose logs --tail=150 web || true
 
+                echo ""
                 echo "==> PostgreSQL logs"
                 compose logs --tail=80 postgres || true
 
+                echo ""
                 echo "==> Redis logs"
                 compose logs --tail=80 redis || true
+
               fi
             fi
 
-            exit "$status"
+            echo ""
+            echo "Existing Docker volumes are preserved."
+            echo "Other projects are not stopped."
+
+            exit "$EXIT_CODE"
           }
 
           trap on_error ERR
 
-          echo "========================================"
+          echo ""
+          echo "======================================"
           echo "DEPLOY SAT HACH PLATFORM"
-          echo "========================================"
+          echo "======================================"
 
-          test -d "$PROJECT_DIR"
+          # =================================================
+          # CHECK PROJECT
+          # =================================================
+          echo ""
+          echo "==> Checking project directory"
+
+          if [ ! -d "$PROJECT_DIR" ]; then
+            echo "Project directory not found:"
+            echo "$PROJECT_DIR"
+            exit 1
+          fi
+
           cd "$PROJECT_DIR"
-          test -d .git
 
-          echo "==> Fetch latest source"
+          if [ ! -d ".git" ]; then
+            echo "Not a Git repository:"
+            echo "$PROJECT_DIR"
+            exit 1
+          fi
+
+          echo "Project: $(pwd)"
+
+          # =================================================
+          # UPDATE SOURCE
+          # =================================================
+          echo ""
+          echo "==> Updating source from GitHub"
 
           git fetch --prune origin "$BRANCH"
+
           git checkout -B "$BRANCH" "origin/$BRANCH"
 
-          echo "==> Current commit"
+          git reset --hard "origin/$BRANCH"
+
+          echo ""
+          echo "Current commit:"
           git log -1 --oneline
 
-          echo "==> Validate files"
+          # =================================================
+          # VALIDATE REQUIRED FILES
+          # =================================================
+          echo ""
+          echo "==> Validating required files"
 
-          test -f "$ENV_FILE"
-          test -f "$COMPOSE_FILE"
-          test -f Dockerfile.server
-          test -f package.json
-          test -f pnpm-lock.yaml
-
-          echo "==> Validate required environment variables"
-
-          for key in \
-            DB_USERNAME \
-            DB_PASSWORD \
-            DB_DATABASE \
-            JWT_ACCESS_SECRET \
-            JWT_REFRESH_SECRET \
-            SUPER_ADMIN_USERNAME \
-            SUPER_ADMIN_PASSWORD \
-            NEXT_PUBLIC_API_URL
+          for FILE in \
+            "$ENV_FILE" \
+            "$COMPOSE_FILE" \
+            "Dockerfile.server" \
+            "package.json" \
+            "pnpm-lock.yaml" \
+            "pnpm-workspace.yaml"
           do
-            if ! grep -q "^${key}=." "$ENV_FILE"; then
-              echo "Missing environment variable: $key"
+            if [ ! -f "$FILE" ]; then
+              echo "Missing file: $FILE"
               exit 1
             fi
           done
 
-          echo "==> Validate Docker Compose"
+          # =================================================
+          # VALIDATE ENVIRONMENT
+          # =================================================
+          echo ""
+          echo "==> Validating environment variables"
+
+          REQUIRED_ENV_VARS="
+          DB_USERNAME
+          DB_PASSWORD
+          DB_DATABASE
+          JWT_ACCESS_SECRET
+          JWT_REFRESH_SECRET
+          SUPER_ADMIN_USERNAME
+          SUPER_ADMIN_PASSWORD
+          NEXT_PUBLIC_API_URL
+          "
+
+          for ENV_NAME in $REQUIRED_ENV_VARS
+          do
+            if ! grep -q "^${ENV_NAME}=." "$ENV_FILE"; then
+              echo "Missing environment variable: $ENV_NAME"
+              exit 1
+            fi
+          done
+
+          echo "Environment variables OK."
+
+          # =================================================
+          # VALIDATE DOCKER COMPOSE
+          # =================================================
+          echo ""
+          echo "==> Validating Docker Compose"
 
           compose config --quiet
 
-          echo "==> Check service definitions"
+          SERVICES="$(compose --profile tools config --services)"
 
-          for service in postgres redis migrate api web; do
-            compose --profile tools config --services \
-              | grep -qx "$service" || {
-                echo "Missing service: $service"
-                exit 1
-              }
+          for SERVICE in postgres redis migrate api web
+          do
+            echo "$SERVICES" | grep -qx "$SERVICE" || {
+              echo "Missing Docker service: $SERVICE"
+              exit 1
+            }
           done
 
-          echo "========================================"
-          echo "BUILD APPLICATION IMAGE"
-          echo "========================================"
+          echo "Docker Compose configuration OK."
+
+          # =================================================
+          # VERIFY REQUIRED PORTS
+          # =================================================
+          echo ""
+          echo "==> Checking Docker port configuration"
+
+          echo "API public port: 8000"
+          echo "Web public port: 8001"
+          echo "PostgreSQL host port: 18003 (localhost only)"
+          echo "Redis host port: 18002 (localhost only)"
+
+          # =================================================
+          # BUILD DOCKER IMAGE
+          # =================================================
+          echo ""
+          echo "======================================"
+          echo "BUILD APPLICATION DOCKER IMAGE"
+          echo "======================================"
 
           compose build api
 
-          echo "========================================"
-          echo "START NEW DATABASE AND REDIS"
-          echo "========================================"
+          echo ""
+          echo "Docker image built successfully."
+
+          # =================================================
+          # START POSTGRESQL AND REDIS
+          # =================================================
+          echo ""
+          echo "======================================"
+          echo "START SAT HACH POSTGRESQL + REDIS"
+          echo "======================================"
 
           compose up -d --wait postgres redis
 
-          echo "========================================"
-          echo "RUN DATABASE MIGRATIONS"
-          echo "========================================"
+          echo ""
+          echo "==> Infrastructure health"
+
+          for CONTAINER in "$DB_CONTAINER" "$REDIS_CONTAINER"
+          do
+            STATUS="$(
+              docker inspect \
+                --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' \
+                "$CONTAINER"
+            )"
+
+            echo "$CONTAINER: $STATUS"
+
+            if [ "$STATUS" != "healthy" ]; then
+              echo "Container is not healthy: $CONTAINER"
+              exit 1
+            fi
+          done
+
+          # =================================================
+          # RUN MIGRATIONS
+          # =================================================
+          echo ""
+          echo "======================================"
+          echo "DATABASE MIGRATIONS"
+          echo "======================================"
 
           compose run --rm -T migrate </dev/null
 
-          echo "========================================"
-          echo "START API AND WEB"
-          echo "========================================"
+          echo ""
+          echo "Database migrations completed."
+
+          # =================================================
+          # START API + WEB
+          # =================================================
+          echo ""
+          echo "======================================"
+          echo "START API + WEB"
+          echo "======================================"
 
           compose up -d --no-build api web
 
-          echo "========================================"
-          echo "HEALTH CHECK"
-          echo "========================================"
-
-          read_env_value() {
-            key="$1"
-            grep "^${key}=" "$ENV_FILE" \
-              | tail -1 \
-              | cut -d= -f2- \
-              | tr -d '\r' \
-              || true
-          }
-
-          API_PORT="$(read_env_value API_PUBLIC_PORT)"
-          WEB_PORT="$(read_env_value WEB_PUBLIC_PORT)"
-
-          API_PORT="${API_PORT:-8000}"
-          WEB_PORT="${WEB_PORT:-8001}"
-
+          # =================================================
+          # HTTP HEALTH CHECK HELPER
+          # =================================================
           wait_http() {
-            name="$1"
-            url="$2"
+            NAME="$1"
+            URL="$2"
+            CONTAINER="$3"
 
-            for attempt in $(seq 1 45); do
+            echo ""
+            echo "==> Waiting for $NAME"
+            echo "URL: $URL"
+
+            for ATTEMPT in $(seq 1 45)
+            do
               if curl \
                 --fail \
                 --silent \
                 --show-error \
                 --max-time 5 \
-                "$url" \
+                "$URL" \
                 >/dev/null 2>&1
               then
-                echo "$name is ready"
+                echo "$NAME is ready."
                 return 0
               fi
 
-              echo "Waiting for $name: $attempt/45"
+              RUNNING="$(
+                docker inspect \
+                  --format='{{.State.Running}}' \
+                  "$CONTAINER" \
+                  2>/dev/null || echo false
+              )"
+
+              if [ "$RUNNING" != "true" ]; then
+                echo "$NAME container stopped."
+
+                docker logs \
+                  --tail=150 \
+                  "$CONTAINER" || true
+
+                return 1
+              fi
+
+              echo "Waiting for $NAME: $ATTEMPT/45"
               sleep 2
             done
 
-            echo "$name failed health check"
+            echo "$NAME health check timed out."
+
+            docker logs \
+              --tail=150 \
+              "$CONTAINER" || true
+
             return 1
           }
 
-          wait_http \
-            "API" \
-            "http://127.0.0.1:${API_PORT}/api/health"
+          # =================================================
+          # WAIT FOR API
+          # =================================================
+          echo ""
+          echo "======================================"
+          echo "API HEALTH CHECK"
+          echo "======================================"
 
           wait_http \
-            "WEB" \
-            "http://127.0.0.1:${WEB_PORT}/login"
+            "Sat Hach API" \
+            "http://127.0.0.1:${API_PORT}/api/health" \
+            "$API_CONTAINER"
 
-          echo "========================================"
-          echo "FINAL STATUS"
-          echo "========================================"
+          # =================================================
+          # WAIT FOR WEB
+          # =================================================
+          echo ""
+          echo "======================================"
+          echo "WEB HEALTH CHECK"
+          echo "======================================"
+
+          wait_http \
+            "Sat Hach Web" \
+            "http://127.0.0.1:${WEB_PORT}/login" \
+            "$WEB_CONTAINER"
+
+          # =================================================
+          # FINAL CONTAINER CHECK
+          # =================================================
+          echo ""
+          echo "======================================"
+          echo "FINAL CONTAINER CHECK"
+          echo "======================================"
+
+          for CONTAINER in \
+            "$DB_CONTAINER" \
+            "$REDIS_CONTAINER" \
+            "$API_CONTAINER" \
+            "$WEB_CONTAINER"
+          do
+            RUNNING="$(
+              docker inspect \
+                --format='{{.State.Running}}' \
+                "$CONTAINER" \
+                2>/dev/null || echo false
+            )"
+
+            if [ "$RUNNING" != "true" ]; then
+              echo "Container not running: $CONTAINER"
+              exit 1
+            fi
+
+            echo "$CONTAINER: RUNNING"
+          done
+
+          # =================================================
+          # FINAL STATUS
+          # =================================================
+          echo ""
+          echo "==> Docker Compose status"
 
           compose ps -a
 
-          echo "==> Cleanup dangling images"
+          # =================================================
+          # CLEANUP
+          # =================================================
+          echo ""
+          echo "==> Cleaning dangling images"
+
           docker image prune -f
 
+          # =================================================
+          # SUCCESS
+          # =================================================
           trap - ERR
 
-          echo "========================================"
+          echo ""
+          echo "======================================"
           echo "SAT HACH DEPLOY SUCCESS"
-          echo "========================================"
+          echo "======================================"
+
+          echo ""
+          echo "Web Admin:"
+          echo "http://163.61.182.214:8001"
+
+          echo ""
+          echo "Backend API:"
+          echo "http://163.61.182.214:8000/api/health"
 
           REMOTE
