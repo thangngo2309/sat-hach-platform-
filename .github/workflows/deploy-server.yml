@@ -87,7 +87,7 @@ jobs:
       # =====================================================
       - name: Test SSH authentication
         env:
-          SSH_PASSWORD: ${{ secrets.DEV_SSH_PASSWORD }}
+          SSH_PASSWORD: ${{ secrets.VPS_SSH_PASSWORD }}
         run: |
           set -Eeuo pipefail
 
@@ -110,7 +110,7 @@ jobs:
       # =====================================================
       - name: Deploy Sat Hach
         env:
-          SSH_PASSWORD: ${{ secrets.DEV_SSH_PASSWORD }}
+          SSH_PASSWORD: ${{ secrets.VPS_SSH_PASSWORD }}
         run: |
           set -Eeuo pipefail
 
