@@ -1,0 +1,22 @@
+{
+  "name": "sat-hach-platform",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@10.15.1",
+  "scripts": {
+    "dev": "pnpm --parallel --filter @sat-hach/api --filter @sat-hach/web dev",
+    "dev:api": "pnpm --filter @sat-hach/api dev",
+    "dev:web": "pnpm --filter @sat-hach/web dev",
+    "build": "pnpm -r --filter './apps/*' build",
+    "typecheck": "pnpm -r --filter './apps/*' typecheck",
+    "db:migration:create": "pnpm --filter @sat-hach/api db:migration:create",
+    "db:migration:generate": "pnpm --filter @sat-hach/api db:migration:generate",
+    "db:migration:run": "pnpm --filter @sat-hach/api db:migration:run",
+    "db:migration:revert": "pnpm --filter @sat-hach/api db:migration:revert",
+    "db:migration:show": "pnpm --filter @sat-hach/api db:migration:show",
+    "docker:up": "docker compose up -d postgres redis",
+    "docker:down": "docker compose down",
+    "docker:full": "docker compose up -d --build",
+    "docker:logs": "docker compose logs -f"
+  }
+}

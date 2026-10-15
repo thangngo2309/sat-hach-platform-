@@ -1,0 +1,57 @@
+
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Build outputs
+dist/
+**/dist/
+.next/
+**/.next/
+out/
+**/out/
+build/
+**/build/
+coverage/
+**/coverage/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+!**/.env.example
+
+# Local overrides
+*.local
+
+# Runtime files
+*.log
+logs/
+tmp/
+temp/
+uploads/
+
+# TypeScript
+*.tsbuildinfo
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+
+# Test artifacts
+playwright-report/
+test-results/
+
+# Security / certificates
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Local database backups
+*.dump
+*.backup
