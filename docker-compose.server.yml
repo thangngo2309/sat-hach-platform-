@@ -1,0 +1,147 @@
+
+name: sat-hach-platform
+
+x-app-image: &app-image
+  image: sat-hach-platform:server
+
+x-app-environment: &app-environment
+  NODE_ENV: production
+  DB_HOST: postgres
+  DB_PORT: "5432"
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: sathach-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USERNAME:?DB_USERNAME is required}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
+      POSTGRES_DB: ${DB_DATABASE:?DB_DATABASE is required}
+    ports:
+      - "127.0.0.1:${DB_PUBLIC_PORT:-18003}:5432"
+    volumes:
+      - sathach_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 15s
+    networks:
+      - sathach_backend
+
+  redis:
+    image: redis:7-alpine
+    container_name: sathach-redis
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+    ports:
+      - "127.0.0.1:${REDIS_PUBLIC_PORT:-18002}:6379"
+    volumes:
+      - sathach_redis_data:/data
+    healthcheck:
+      test:
+        - CMD
+        - redis-cli
+        - ping
+      interval: 10s
+      timeout: 5s
+      retries: 15
+    networks:
+      - sathach_backend
+
+  migrate:
+    <<: *app-image
+    container_name: sathach-migrate
+    profiles:
+      - tools
+    restart: "no"
+    working_dir: /workspace
+    command:
+      - pnpm
+      - db:migration:run
+    env_file:
+      - .env.server
+    environment:
+      <<: *app-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - sathach_backend
+
+  api:
+    <<: *app-image
+    container_name: sathach-api
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:?NEXT_PUBLIC_API_URL is required}
+    restart: unless-stopped
+    working_dir: /workspace
+    command:
+      - node
+      - apps/api/dist/main.js
+    env_file:
+      - .env.server
+    environment:
+      <<: *app-environment
+      PORT: "8000"
+    ports:
+      - "0.0.0.0:${API_PUBLIC_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - sathach_backend
+
+  web:
+    <<: *app-image
+    container_name: sathach-web
+    restart: unless-stopped
+    working_dir: /workspace
+    command:
+      - pnpm
+      - --filter
+      - "@sat-hach/web"
+      - exec
+      - next
+      - start
+      - -H
+      - 0.0.0.0
+      - -p
+      - "8001"
+    env_file:
+      - .env.server
+    environment:
+      NODE_ENV: production
+      PORT: "8001"
+    ports:
+      - "0.0.0.0:${WEB_PUBLIC_PORT:-8001}:8001"
+    depends_on:
+      - api
+    networks:
+      - sathach_backend
+
+networks:
+  sathach_backend:
+    driver: bridge
+
+volumes:
+  sathach_postgres_data:
+    name: sathach_postgres_data
+  sathach_redis_data:
+    name: sathach_redis_data

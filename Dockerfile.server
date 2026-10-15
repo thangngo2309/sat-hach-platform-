@@ -1,0 +1,40 @@
+
+FROM node:22-bookworm-slim AS builder
+
+WORKDIR /workspace
+
+ENV CI=true
+ENV NEXT_TELEMETRY_DISABLED=1
+
+RUN corepack enable
+
+COPY . .
+
+RUN corepack pnpm install --frozen-lockfile
+
+ARG NEXT_PUBLIC_API_URL
+
+ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+
+RUN test -n "$NEXT_PUBLIC_API_URL"
+
+RUN corepack pnpm --filter @sat-hach/api build
+
+RUN corepack pnpm --filter @sat-hach/web build
+
+
+FROM node:22-bookworm-slim AS runtime
+
+WORKDIR /workspace
+
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+
+RUN corepack enable
+
+COPY --from=builder /workspace /workspace
+
+EXPOSE 8000
+EXPOSE 8001
+
+CMD ["node", "apps/api/dist/main.js"]
