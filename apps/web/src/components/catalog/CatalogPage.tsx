@@ -35,6 +35,7 @@ import {
 } from "@mui/icons-material";
 
 import { useAuth } from "@/components/auth/AuthProvider";
+import { StudentAvatar } from "@/components/students/StudentAvatar";
 
 import {
   getCourses,
@@ -47,7 +48,6 @@ import {
 } from "@/lib/catalog";
 
 type Section = "schools" | "courses" | "students";
-
 type Item = TrainingSchool | Course | Student;
 
 const sectionConfig = {
@@ -238,6 +238,13 @@ export function CatalogPage({ section }: { section: Section }) {
 
   const renderStudent = (student: Student) => (
     <TableRow hover key={student.id}>
+      <TableCell>
+        <StudentAvatar
+          studentId={student.id}
+          fullName={student.fullName}
+          size={42}
+        />
+      </TableCell>
       <TableCell sx={{ fontWeight: 700 }}>{student.registrationCode}</TableCell>
       <TableCell>{student.fullName}</TableCell>
       <TableCell>{formatDate(student.dateOfBirth)}</TableCell>
@@ -410,7 +417,13 @@ export function CatalogPage({ section }: { section: Section }) {
       <Card variant="outlined" sx={{ borderRadius: 3 }}>
         <CardContent sx={{ p: 0 }}>
           {fetching && !result ? (
-            <Box sx={{ py: 8, display: "grid", placeItems: "center" }}>
+            <Box
+              sx={{
+                py: 8,
+                display: "grid",
+                placeItems: "center",
+              }}
+            >
               <CircularProgress />
             </Box>
           ) : (
@@ -463,6 +476,7 @@ export function CatalogPage({ section }: { section: Section }) {
                   {section === "students" && (
                     <TableRow>
                       {[
+                        "Ảnh",
                         "Mã đăng ký",
                         "Họ và tên",
                         "Ngày sinh",
@@ -492,7 +506,13 @@ export function CatalogPage({ section }: { section: Section }) {
                   {!rows.length && (
                     <TableRow>
                       <TableCell
-                        colSpan={section === "courses" ? 7 : 6}
+                        colSpan={
+                          section === "courses"
+                            ? 7
+                            : section === "students"
+                            ? 7
+                            : 6
+                        }
                         align="center"
                         sx={{ py: 6 }}
                       >

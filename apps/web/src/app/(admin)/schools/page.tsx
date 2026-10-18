@@ -1,10 +1,5 @@
-import { Suspense } from "react";
-import { CatalogPage } from "@/components/catalog/CatalogPage";
+import { TrainingSchoolManagementPage } from "@/components/catalog/TrainingSchoolManagementPage";
 
 export default function SchoolsPage() {
-  return (
-    <Suspense fallback={<div>Đang tải danh sách trường...</div>}>
-      <CatalogPage section="schools" />
-    </Suspense>
-  );
+  return <TrainingSchoolManagementPage />;
 }

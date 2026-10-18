@@ -9,12 +9,15 @@ import { createHash } from 'node:crypto';
 import { DataSource } from 'typeorm';
 
 import { parseBc1 } from './bc1-parser.js';
+import { extractStudentPhotoMap } from './student-photo-xml.util.js';
+import { StudentPhotoService } from '../students/student-photo.service.js';
 
 @Injectable()
 export class Bc1ImportService {
   constructor(
     @InjectDataSource()
     private readonly dataSource: DataSource,
+    private readonly studentPhotoService: StudentPhotoService,
   ) {}
 
   private validateFile(file: Express.Multer.File | undefined) {
@@ -62,6 +65,7 @@ export class Bc1ImportService {
 
   async confirm(file: Express.Multer.File | undefined, userId: number) {
     const { document, hash } = this.validateFile(file);
+    const photos = extractStudentPhotoMap(file!.buffer, 'BAO_CAO1');
 
     return this.dataSource.transaction(async (manager) => {
       // PostgreSQL unique constraint is the final safeguard
@@ -231,6 +235,17 @@ export class Bc1ImportService {
           }
 
           studentId = Number(existingStudents[0].id);
+        }
+
+        const photoBase64 = photos.get(student.registrationCode);
+
+        if (photoBase64) {
+          await this.studentPhotoService.saveBase64(manager, {
+            studentId,
+            base64: photoBase64,
+            sourceType: 'BC1',
+            importBatchId: batchId,
+          });
         }
 
         const enrollmentRows = await manager.query(

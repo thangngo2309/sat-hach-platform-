@@ -11,6 +11,12 @@ import {
 
 import { Enrollment } from './enrollment.entity.js';
 
+export enum StudentCandidateType {
+  TRAINING = 'training',
+  INDEPENDENT = 'independent',
+  UNKNOWN = 'unknown',
+}
+
 @Entity('students')
 export class Student {
   @PrimaryGeneratedColumn()
@@ -99,6 +105,21 @@ export class Student {
     nullable: true,
   })
   currentAddress!: string | null;
+
+  @Column({
+    name: 'candidate_type',
+    type: 'varchar',
+    length: 30,
+    default: StudentCandidateType.UNKNOWN,
+  })
+  candidateType!: StudentCandidateType;
+
+  @Column({
+    name: 'candidate_type_updated_at',
+    type: 'timestamptz',
+    nullable: true,
+  })
+  candidateTypeUpdatedAt!: Date | null;
 
   @OneToMany(() => Enrollment, (enrollment) => enrollment.student)
   enrollments!: Relation<Enrollment[]>;

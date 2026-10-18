@@ -52,8 +52,8 @@ services:
         - CMD
         - redis-cli
         - ping
-      interval: 10s
-      timeout: 5s
+      interval: 5s
+      timeout: 3s
       retries: 15
     networks:
       - sathach_backend
@@ -72,6 +72,7 @@ services:
       - .env.server
     environment:
       <<: *app-environment
+      STUDENT_PHOTO_STORAGE_PATH: /workspace/storage/students
     depends_on:
       postgres:
         condition: service_healthy
@@ -98,8 +99,11 @@ services:
     environment:
       <<: *app-environment
       PORT: "8000"
+      STUDENT_PHOTO_STORAGE_PATH: /workspace/storage/students
     ports:
       - "0.0.0.0:${API_PUBLIC_PORT:-8000}:8000"
+    volumes:
+      - ./storage/students:/workspace/storage/students
     depends_on:
       postgres:
         condition: service_healthy

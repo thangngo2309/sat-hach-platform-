@@ -58,7 +58,6 @@ export class Bc2ViewService {
 
   async students(query: Bc2ViewQuery) {
     const f = this.filters(query);
-
     const params = [f.search, f.schoolId, f.courseId, f.status];
 
     const where = `
@@ -120,6 +119,7 @@ export class Bc2ViewService {
     const data = await this.db.query(
       `SELECT
            s.id,
+           (s.photo_id IS NOT NULL) AS "hasPhoto",
            s.registration_code AS "registrationCode",
            s.full_name AS "fullName",
            s.date_of_birth AS "dateOfBirth",
@@ -199,6 +199,7 @@ export class Bc2ViewService {
     const students = await this.db.query(
       `SELECT
           id,
+          (photo_id IS NOT NULL) AS "hasPhoto",
           registration_code AS "registrationCode",
           full_name AS "fullName",
           family_name AS "familyName",

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
+
 import {
   Alert,
   Box,
@@ -26,6 +27,7 @@ import {
   TextField,
   Typography,
 } from "@mui/material";
+
 import {
   CloseOutlined,
   RefreshOutlined,
@@ -34,21 +36,24 @@ import {
 } from "@mui/icons-material";
 
 import { useAuth } from "@/components/auth/AuthProvider";
+import { StudentAvatar } from "@/components/students/StudentAvatar";
+
 import {
   getStudentDetail,
   listStudents,
   type PageResult,
   type StudentDetail,
   type StudentRow,
-  type ViewParams,
 } from "@/lib/bc2-view";
 
 type Bc2Status = "all" | "has_bc2" | "no_bc2";
 
 function formatDate(value?: string | null) {
   if (!value) return "—";
+
   const text = value.slice(0, 10);
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+
   return match ? `${match[3]}/${match[2]}/${match[1]}` : text;
 }
 
@@ -101,6 +106,7 @@ export default function StudentsPage() {
   const [reload, setReload] = useState(0);
 
   const [result, setResult] = useState<PageResult<StudentRow> | null>(null);
+
   const [fetching, setFetching] = useState(false);
   const [error, setError] = useState("");
 
@@ -275,13 +281,7 @@ export default function StudentsPage() {
 
       <Card variant="outlined" sx={{ borderRadius: 3 }}>
         {fetching && !result ? (
-          <Box
-            sx={{
-              py: 8,
-              display: "grid",
-              placeItems: "center",
-            }}
-          >
+          <Box sx={{ py: 8, display: "grid", placeItems: "center" }}>
             <CircularProgress />
           </Box>
         ) : (
@@ -289,6 +289,7 @@ export default function StudentsPage() {
             <Table size="small" sx={{ minWidth: 1000 }}>
               <TableHead>
                 <TableRow>
+                  <TableCell>Ảnh</TableCell>
                   <TableCell>Mã đăng ký</TableCell>
                   <TableCell>Họ và tên</TableCell>
                   <TableCell>Ngày sinh</TableCell>
@@ -304,11 +305,20 @@ export default function StudentsPage() {
                 {(result?.data ?? []).map((student) => {
                   const courses = student.courses ?? [];
                   const bc2Reports = student.bc2Reports ?? [];
+
                   const hasBc2 =
                     student.hasBc2 === true || bc2Reports.length > 0;
 
                   return (
                     <TableRow key={student.id} hover>
+                      <TableCell>
+                        <StudentAvatar
+                          studentId={student.id}
+                          fullName={student.fullName}
+                          size={44}
+                        />
+                      </TableCell>
+
                       <TableCell>{student.registrationCode}</TableCell>
 
                       <TableCell sx={{ fontWeight: 700 }}>
@@ -373,7 +383,7 @@ export default function StudentsPage() {
 
                 {!fetching && (result?.data.length ?? 0) === 0 && (
                   <TableRow>
-                    <TableCell colSpan={8} align="center" sx={{ py: 5 }}>
+                    <TableCell colSpan={9} align="center" sx={{ py: 5 }}>
                       Không có học viên phù hợp.
                     </TableCell>
                   </TableRow>
@@ -423,6 +433,7 @@ export default function StudentsPage() {
                 Tổng hợp thông tin BC1 và BC2
               </Typography>
             </Box>
+
             <IconButton onClick={() => setSelectedId(null)}>
               <CloseOutlined />
             </IconButton>
@@ -445,9 +456,34 @@ export default function StudentsPage() {
           ) : detail ? (
             <Stack spacing={3}>
               <Box>
+                <Box
+                  sx={{
+                    display: "flex",
+                    gap: 2,
+                    alignItems: "center",
+                    mb: 2,
+                  }}
+                >
+                  <StudentAvatar
+                    studentId={detail.id}
+                    fullName={detail.fullName}
+                    size={112}
+                  />
+
+                  <Box>
+                    <Typography sx={{ fontWeight: 700 }}>
+                      {detail.fullName}
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      {detail.registrationCode}
+                    </Typography>
+                  </Box>
+                </Box>
+
                 <Typography variant="h6" sx={{ fontWeight: 700, mb: 2 }}>
                   Thông tin cá nhân
                 </Typography>
+
                 <Box
                   sx={{
                     display: "grid",
@@ -488,7 +524,11 @@ export default function StudentsPage() {
                     <Card
                       key={course.id}
                       variant="outlined"
-                      sx={{ p: 2, mb: 1.5, borderRadius: 2 }}
+                      sx={{
+                        p: 2,
+                        mb: 1.5,
+                        borderRadius: 2,
+                      }}
                     >
                       <Box
                         sx={{
@@ -531,7 +571,11 @@ export default function StudentsPage() {
                     <Card
                       key={report.reportId}
                       variant="outlined"
-                      sx={{ p: 2, mb: 1.5, borderRadius: 2 }}
+                      sx={{
+                        p: 2,
+                        mb: 1.5,
+                        borderRadius: 2,
+                      }}
                     >
                       <Box
                         sx={{

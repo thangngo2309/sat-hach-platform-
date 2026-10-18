@@ -32,6 +32,7 @@ import {
   DescriptionOutlined,
   DirectionsCarOutlined,
   DriveFolderUploadOutlined,
+  EmojiEventsOutlined,
   ExpandLess,
   ExpandMore,
   GroupsOutlined,
@@ -68,6 +69,11 @@ const mainItems: MenuEntry[] = [
     icon: SchoolOutlined,
   },
   {
+    label: "Trung tâm sát hạch",
+    href: "/examination-centers",
+    icon: DirectionsCarOutlined,
+  },
+  {
     label: "Khóa học",
     href: "/courses",
     icon: DescriptionOutlined,
@@ -98,6 +104,16 @@ const importItems: MenuEntry[] = [
   {
     label: "Import BC2",
     href: "/imports/bc2",
+    icon: DriveFolderUploadOutlined,
+  },
+  {
+    label: "Import danh sách dự thi (48_)",
+    href: "/imports/exam-list",
+    icon: DriveFolderUploadOutlined,
+  },
+  {
+    label: "Import kết quả sát hạch (KQSH)",
+    href: "/imports/exam-result",
     icon: DriveFolderUploadOutlined,
   },
   {
@@ -137,7 +153,6 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
   const theme = useTheme();
-
   const isMobile = useMediaQuery(theme.breakpoints.down("md"));
 
   const { user, loading, signOut } = useAuth();
@@ -148,7 +163,6 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
   const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
 
   const isSuperAdmin = user?.role === "super_admin";
-
   const drawerWidth = collapsed ? COLLAPSED_WIDTH : DRAWER_WIDTH;
 
   const currentItem =
@@ -182,9 +196,7 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
   };
 
   const renderEntry = (item: MenuEntry, compact: boolean) => {
-    if (item.superAdminOnly && !isSuperAdmin) {
-      return null;
-    }
+    if (item.superAdminOnly && !isSuperAdmin) return null;
 
     const Icon = item.icon;
     const selected = isRouteSelected(pathname, item.href);
@@ -198,7 +210,7 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
           minHeight: 44,
           mx: 1,
           my: 0.35,
-          px: compact ? 2 : 2,
+          px: 2,
           borderRadius: 2,
           justifyContent: compact ? "center" : "initial",
           color: selected ? "#fff" : "#aebed2",
@@ -324,13 +336,7 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
               <Typography noWrap sx={{ fontSize: 15, fontWeight: 800 }}>
                 SÁT HẠCH Ô TÔ
               </Typography>
-              <Typography
-                noWrap
-                sx={{
-                  fontSize: 11,
-                  color: "#9eb6cf",
-                }}
-              >
+              <Typography noWrap sx={{ fontSize: 11, color: "#9eb6cf" }}>
                 Hệ thống quản lý
               </Typography>
             </Box>
@@ -345,9 +351,7 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
           flex: 1,
           overflowY: "auto",
           py: 1,
-          "&::-webkit-scrollbar": {
-            width: 5,
-          },
+          "&::-webkit-scrollbar": { width: 5 },
           "&::-webkit-scrollbar-thumb": {
             bgcolor: "#3a5676",
             borderRadius: 2,
@@ -377,12 +381,7 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
                 color: "#aebed2",
               }}
             >
-              <ListItemIcon
-                sx={{
-                  minWidth: 40,
-                  color: "inherit",
-                }}
-              >
+              <ListItemIcon sx={{ minWidth: 40, color: "inherit" }}>
                 <DriveFolderUploadOutlined fontSize="small" />
               </ListItemIcon>
 
@@ -390,10 +389,7 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
                 primary="Quản lý import"
                 slotProps={{
                   primary: {
-                    sx: {
-                      fontSize: 14,
-                      fontWeight: 600,
-                    },
+                    sx: { fontSize: 14, fontWeight: 600 },
                   },
                 }}
               />
@@ -442,26 +438,29 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
           </Avatar>
 
           {!compact && (
-            <Box sx={{ minWidth: 0 }}>
+            <Box sx={{ minWidth: 0, flex: 1 }}>
               <Typography
                 noWrap
-                sx={{
-                  fontSize: 13,
-                  fontWeight: 700,
-                }}
+                sx={{ color: "#fff", fontSize: 13, fontWeight: 700 }}
               >
-                {user?.fullName}
+                {user?.fullName ?? ""}
               </Typography>
-              <Typography
-                noWrap
-                sx={{
-                  fontSize: 11,
-                  color: "#9eb6cf",
-                }}
-              >
-                {isSuperAdmin ? "Super Admin" : user?.role}
+              <Typography noWrap sx={{ color: "#9eb6cf", fontSize: 11 }}>
+                @{user?.username ?? ""}
               </Typography>
             </Box>
+          )}
+
+          {!compact && (
+            <Tooltip title="Đăng xuất">
+              <IconButton
+                size="small"
+                onClick={() => void handleLogout()}
+                sx={{ color: "#aebed2" }}
+              >
+                <LogoutOutlined fontSize="small" />
+              </IconButton>
+            </Tooltip>
           )}
         </Box>
       </Box>
@@ -490,71 +489,36 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
         position="fixed"
         elevation={0}
         sx={{
-          ml: { md: `${drawerWidth}px` },
+          bgcolor: "#fff",
+          color: "#19324f",
+          borderBottom: "1px solid #e5eaf0",
           width: {
+            xs: "100%",
             md: `calc(100% - ${drawerWidth}px)`,
           },
-          bgcolor: "#fff",
-          color: "#172335",
-          borderBottom: "1px solid #e2e8f0",
+          ml: { md: `${drawerWidth}px` },
           transition: theme.transitions.create(["width", "margin"], {
             duration: 200,
           }),
         }}
       >
-        <Toolbar
-          sx={{
-            minHeight: "68px !important",
-            gap: 1.5,
-          }}
-        >
-          <IconButton
-            aria-label="Mở menu"
-            onClick={() => {
-              if (isMobile) {
-                setMobileOpen(true);
-              } else {
-                setCollapsed((value) => !value);
-              }
-            }}
-          >
-            <MenuOutlined />
-          </IconButton>
+        <Toolbar sx={{ minHeight: "68px !important", gap: 1 }}>
+          {isMobile ? (
+            <IconButton onClick={() => setMobileOpen(true)}>
+              <MenuOutlined />
+            </IconButton>
+          ) : (
+            <IconButton onClick={() => setCollapsed((value) => !value)}>
+              <MenuOutlined />
+            </IconButton>
+          )}
 
-          <Box sx={{ flex: 1, minWidth: 0 }}>
-            <Typography
-              variant="h6"
-              noWrap
-              sx={{
-                fontWeight: 800,
-                fontSize: {
-                  xs: 16,
-                  md: 19,
-                },
-              }}
-            >
-              {pageTitle}
-            </Typography>
-
-            <Typography
-              variant="caption"
-              color="text.secondary"
-              sx={{
-                display: {
-                  xs: "none",
-                  sm: "block",
-                },
-              }}
-            >
-              Hệ thống quản lý đào tạo và sát hạch lái xe
-            </Typography>
-          </Box>
+          <Typography noWrap sx={{ fontWeight: 700, flex: 1, fontSize: 17 }}>
+            {pageTitle}
+          </Typography>
 
           <Tooltip title="Tài khoản">
-            <IconButton
-              aria-label="Thông tin tài khoản"
-              onClick={(event) => setMenuAnchor(event.currentTarget)}
-            >
+            <IconButton onClick={(event) => setMenuAnchor(event.currentTarget)}>
               <Avatar
                 sx={{
                   bgcolor: "#174879",
@@ -572,19 +536,8 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
             open={Boolean(menuAnchor)}
             onClose={() => setMenuAnchor(null)}
           >
-            <Box
-              sx={{
-                px: 2,
-                py: 1,
-                minWidth: 190,
-              }}
-            >
-              <Typography
-                sx={{
-                  fontWeight: 700,
-                  fontSize: 14,
-                }}
-              >
+            <Box sx={{ px: 2, py: 1, minWidth: 190 }}>
+              <Typography sx={{ fontWeight: 700, fontSize: 14 }}>
                 {user.fullName}
               </Typography>
               <Typography variant="caption" color="text.secondary">
@@ -608,10 +561,7 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
         onClose={() => setMobileOpen(false)}
         ModalProps={{ keepMounted: true }}
         sx={{
-          display: {
-            xs: "block",
-            md: "none",
-          },
+          display: { xs: "block", md: "none" },
           "& .MuiDrawer-paper": {
             width: DRAWER_WIDTH,
             border: 0,
@@ -625,17 +575,16 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
         variant="permanent"
         open
         sx={{
-          display: {
-            xs: "none",
-            md: "block",
-          },
+          display: { xs: "none", md: "block" },
           width: drawerWidth,
           flexShrink: 0,
           "& .MuiDrawer-paper": {
             width: drawerWidth,
             border: 0,
             boxSizing: "border-box",
-            transition: theme.transitions.create("width", { duration: 200 }),
+            transition: theme.transitions.create("width", {
+              duration: 200,
+            }),
           },
         }}
       >
@@ -653,16 +602,14 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
           minHeight: "100vh",
           bgcolor: "#f5f7fb",
           pt: "68px",
-          transition: theme.transitions.create("width", { duration: 200 }),
+          transition: theme.transitions.create("width", {
+            duration: 200,
+          }),
         }}
       >
         <Box
           sx={{
-            p: {
-              xs: 2,
-              sm: 3,
-              lg: 4,
-            },
+            p: { xs: 2, sm: 3, lg: 4 },
             maxWidth: 1600,
             mx: "auto",
           }}

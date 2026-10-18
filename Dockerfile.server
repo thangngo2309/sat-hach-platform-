@@ -29,10 +29,20 @@ WORKDIR /workspace
 
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
+ENV STUDENT_PHOTO_STORAGE_PATH=/workspace/storage/students
 
 RUN corepack enable
 
+# Chuyển ảnh JPEG 2000 (JP2) từ XML sang PNG.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+       libopenjp2-tools \
+       ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY --from=builder /workspace /workspace
+
+RUN mkdir -p /workspace/storage/students
 
 EXPOSE 8000
 EXPOSE 8001
