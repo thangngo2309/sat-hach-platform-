@@ -36,8 +36,74 @@ export type StudentBc2 = {
   sourceData?: Record<string, unknown>;
 };
 
+export type StudentExamStatus =
+  | "passed"
+  | "failed"
+  | "pending"
+  | "not_examined";
+
+export type StudentLatestExam = {
+  id: number;
+  sessionId: number;
+  sessionCode: string;
+  examDate: string | null;
+  examinationNumber: string | null;
+  resultStatus: string | null;
+  hasResult: boolean;
+};
+
+export type StudentExamPart = {
+  id: number;
+  partOrder: number;
+  examType: string;
+  resultStatus: string | null;
+  examDate: string | null;
+  score: string | null;
+  maximumScore: string | null;
+};
+
+export type StudentExamHistory = {
+  id: number;
+  sessionId: number;
+  sessionCode: string;
+  examDate: string | null;
+  examTime: string | null;
+  centerCode: string;
+  centerName: string | null;
+  registrationCode: string;
+  examinationNumber: string | null;
+  licenseClass: string | null;
+  examinationContent: string | null;
+  resultStatus: string | null;
+  hasResult: boolean;
+  hasAbsentPart: boolean;
+  theoryScore: string | null;
+  practicalScore: string | null;
+  roadScore: string | null;
+  parts: StudentExamPart[];
+};
+
+export type StudentExamPartStat = {
+  examType: string;
+  attemptCount: number;
+  passedCount: number;
+  failedCount: number;
+  absentCount: number;
+};
+
+export type StudentExamSummary = {
+  total: number;
+  passed: number;
+  failed: number;
+  pending: number;
+  notExamined: number;
+  everAbsent: number;
+  retake: number;
+};
+
 export type StudentRow = {
   id: number;
+  hasPhoto: boolean;
   registrationCode: string;
   fullName: string;
   dateOfBirth: string | null;
@@ -47,6 +113,13 @@ export type StudentRow = {
   bc2Count: number;
   courses: StudentCourse[];
   bc2Reports: StudentBc2[];
+
+  examSessionCount: number;
+  examResultCount: number;
+  passedSessionCount: number;
+  everAbsent: boolean;
+  examStatus: StudentExamStatus;
+  latestExam: StudentLatestExam | null;
 };
 
 export type StudentDetail = StudentRow & {
@@ -57,6 +130,13 @@ export type StudentDetail = StudentRow & {
   nationalityName: string | null;
   permanentAddress: string | null;
   currentAddress: string | null;
+
+  examHistory: StudentExamHistory[];
+  partStats: StudentExamPartStat[];
+};
+
+export type StudentsPageResult = PageResult<StudentRow> & {
+  summary: StudentExamSummary;
 };
 
 export type CourseSummary = {
@@ -80,6 +160,7 @@ export type ViewParams = {
   schoolId?: number;
   courseId?: number;
   bc2Status?: "all" | "has_bc2" | "no_bc2";
+  examStatus?: "all" | StudentExamStatus | "absent" | "retake";
 };
 
 async function request<T>(path: string, token: string): Promise<T> {
@@ -113,6 +194,7 @@ function queryString(params: ViewParams) {
   const query = new URLSearchParams();
 
   query.set("page", String(params.page ?? 1));
+
   query.set("limit", String(params.limit ?? 20));
 
   if (params.search?.trim()) {
@@ -131,14 +213,15 @@ function queryString(params: ViewParams) {
     query.set("bc2Status", params.bc2Status);
   }
 
+  if (params.examStatus && params.examStatus !== "all") {
+    query.set("examStatus", params.examStatus);
+  }
+
   return query.toString();
 }
 
 export function listStudents(token: string, params: ViewParams) {
-  return request<PageResult<StudentRow>>(
-    `/students?${queryString(params)}`,
-    token
-  );
+  return request<StudentsPageResult>(`/students?${queryString(params)}`, token);
 }
 
 export function getStudentDetail(token: string, id: number) {
