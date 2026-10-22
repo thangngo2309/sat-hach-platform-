@@ -29,7 +29,9 @@ import {
 } from "@mui/material";
 
 import {
+  AddOutlined,
   CloseOutlined,
+  EditOutlined,
   RefreshOutlined,
   SearchOutlined,
   VisibilityOutlined,
@@ -45,6 +47,8 @@ import {
   type StudentDetail,
   type StudentRow,
 } from "@/lib/bc2-view";
+import { StudentFormData } from "@/lib/student-management";
+import { StudentFormDialog } from "@/components/students/StudentFormDialog";
 
 type Bc2Status = "all" | "has_bc2" | "no_bc2";
 
@@ -115,6 +119,12 @@ export default function StudentsPage() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState("");
 
+  const [formOpen, setFormOpen] = useState(false);
+
+  const [editingStudent, setEditingStudent] = useState<
+    (Partial<StudentFormData> & { id: number; hasPhoto?: boolean }) | null
+  >(null);
+
   const load = useCallback(async () => {
     if (!accessToken) return;
 
@@ -184,6 +194,42 @@ export default function StudentsPage() {
     };
   }, [accessToken, selectedId]);
 
+  const openCreateStudent = () => {
+    setEditingStudent(null);
+    setFormOpen(true);
+  };
+
+  const openEditStudent = async (id: number) => {
+    if (!accessToken) return;
+
+    try {
+      const student = await getStudentDetail(accessToken, id);
+
+      setEditingStudent({
+        id: student.id,
+        registrationCode: student.registrationCode,
+        fullName: student.fullName,
+        familyName: student.familyName ?? "",
+        givenName: student.givenName ?? "",
+        dateOfBirth: student.dateOfBirth ?? "",
+        gender: student.gender ?? "",
+        identityNumber: student.identityNumber ?? "",
+        nationalityCode: student.nationalityCode ?? "",
+        nationalityName: student.nationalityName ?? "",
+        permanentAddress: student.permanentAddress ?? "",
+        currentAddress: student.currentAddress ?? "",
+      });
+
+      setFormOpen(true);
+    } catch (error) {
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Không thể tải học viên để chỉnh sửa."
+      );
+    }
+  };
+
   if (authLoading) {
     return (
       <Box sx={{ display: "grid", placeItems: "center", py: 8 }}>
@@ -211,15 +257,25 @@ export default function StudentsPage() {
           </Typography>
         </Box>
 
-        <Button
-          variant="outlined"
-          startIcon={<RefreshOutlined />}
-          onClick={() => setReload((value) => value + 1)}
-          disabled={fetching}
-          sx={{ textTransform: "none" }}
-        >
-          Tải lại
-        </Button>
+        <Box>
+          <Button
+            variant="contained"
+            startIcon={<AddOutlined />}
+            onClick={openCreateStudent}
+            sx={{ textTransform: "none", marginRight: 1 }}
+          >
+            Thêm học viên
+          </Button>
+          <Button
+            variant="outlined"
+            startIcon={<RefreshOutlined />}
+            onClick={() => setReload((value) => value + 1)}
+            disabled={fetching}
+            sx={{ textTransform: "none" }}
+          >
+            Tải lại
+          </Button>
+        </Box>
       </Stack>
 
       {error && <Alert severity="error">{error}</Alert>}
@@ -297,7 +353,7 @@ export default function StudentsPage() {
                   <TableCell>Khóa BC1</TableCell>
                   <TableCell>Trạng thái BC2</TableCell>
                   <TableCell>Mã BC2</TableCell>
-                  <TableCell align="right">Thao tác</TableCell>
+                  <TableCell align="center" width={200}>Thao tác</TableCell>
                 </TableRow>
               </TableHead>
 
@@ -368,6 +424,15 @@ export default function StudentsPage() {
                       </TableCell>
 
                       <TableCell align="right">
+                        <Button
+                          size="small"
+                          startIcon={<EditOutlined />}
+                          onClick={() => void openEditStudent(student.id)}
+                          sx={{ textTransform: "none" }}
+                        >
+                          Sửa
+                        </Button>
+
                         <Button
                           size="small"
                           startIcon={<VisibilityOutlined />}
@@ -626,6 +691,18 @@ export default function StudentsPage() {
           ) : null}
         </DialogContent>
       </Dialog>
+
+      <StudentFormDialog
+        open={formOpen}
+        student={editingStudent}
+        onClose={() => setFormOpen(false)}
+        onSaved={() => {
+          setFormOpen(false);
+          setEditingStudent(null);
+          setSelectedId(null);
+          setReload((current) => current + 1);
+        }}
+      />
     </Stack>
   );
 }

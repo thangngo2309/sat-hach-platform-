@@ -24,7 +24,13 @@ import { DataSource, EntityManager } from 'typeorm';
 const execFileAsync = promisify(execFile);
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 
-export type StudentPhotoSource = 'BC1' | 'BC2' | 'EXAM_LIST' | 'EXAM_RESULT';
+
+export type StudentPhotoSource =
+  | 'BC1'
+  | 'BC2'
+  | 'EXAM_LIST'
+  | 'EXAM_RESULT'
+  | 'MANUAL';
 
 export type StudentPhotoFile = {
   content: Buffer;

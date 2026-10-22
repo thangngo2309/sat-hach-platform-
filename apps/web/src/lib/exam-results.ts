@@ -15,6 +15,8 @@ export type ExamPart = {
 export type ExamResultCandidate = {
   id: number;
   studentId: number;
+  hasPhoto: boolean;
+  hasAbsentPart: boolean;
   registrationCode: string;
   examinationNumber: string | null;
   fullName: string;
@@ -42,6 +44,7 @@ export type ExamSession = {
   withResults: number;
   passed: number;
   failed: number;
+  absent: number;
 };
 
 export type ExamResultsPage = {
@@ -54,6 +57,7 @@ export type ExamResultsPage = {
     withResults: number;
     passed: number;
     failed: number;
+    absent: number;
     independent: number;
   };
   data: ExamResultCandidate[];
@@ -125,7 +129,9 @@ async function handle<T>(response: Response): Promise<T> {
 
 export function getExamSessions(token: string) {
   return fetch(`${API_URL}/imports/exam-result/sessions`, {
-    headers: { Authorization: `Bearer ${token}` },
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
     credentials: "include",
     cache: "no-store",
   }).then((res) => handle<ExamSession[]>(res));
@@ -147,8 +153,14 @@ export function getExamResults(
     limit: String(params.limit ?? 20),
   });
 
-  if (params.search) query.set("search", params.search);
-  if (params.status) query.set("status", params.status);
+  if (params.search) {
+    query.set("search", params.search);
+  }
+
+  if (params.status) {
+    query.set("status", params.status);
+  }
+
   if (params.candidateType) {
     query.set("candidateType", params.candidateType);
   }
@@ -156,9 +168,11 @@ export function getExamResults(
   return fetch(
     `${API_URL}/imports/exam-result/sessions/${encodeURIComponent(
       code
-    )}/results?${query}`,
+    )}/results?${query.toString()}`,
     {
-      headers: { Authorization: `Bearer ${token}` },
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
       credentials: "include",
       cache: "no-store",
     }

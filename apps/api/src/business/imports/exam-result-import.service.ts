@@ -56,10 +56,10 @@ export class ExamResultImportService {
   private async validateCandidates(document: ExamResultDocument) {
     const sessions: IdRow[] = await this.dataSource.query(
       `
-          SELECT id
-          FROM examination_sessions
-          WHERE code = $1
-          `,
+        SELECT id
+        FROM examination_sessions
+        WHERE code = $1
+      `,
       [document.sessionCode],
     );
 
@@ -73,17 +73,17 @@ export class ExamResultImportService {
 
     const stored: StoredCandidate[] = await this.dataSource.query(
       `
-          SELECT
-            ec.id,
-            ec.student_id AS "studentId",
-            ec.registration_code AS "registrationCode",
-            ec.examination_number AS "examinationNumber",
-            st.full_name AS "fullName",
-            st.identity_number AS "identityNumber"
-          FROM examination_candidates ec
-          JOIN students st ON st.id = ec.student_id
-          WHERE ec.examination_session_id = $1
-          `,
+        SELECT
+          ec.id,
+          ec.student_id AS "studentId",
+          ec.registration_code AS "registrationCode",
+          ec.examination_number AS "examinationNumber",
+          st.full_name AS "fullName",
+          st.identity_number AS "identityNumber"
+        FROM examination_candidates ec
+        JOIN students st ON st.id = ec.student_id
+        WHERE ec.examination_session_id = $1
+      `,
       [sessionId],
     );
 
@@ -138,10 +138,10 @@ export class ExamResultImportService {
 
     const existing: IdRow[] = await this.dataSource.query(
       `
-          SELECT id
-          FROM import_batches
-          WHERE file_sha256 = $1
-          `,
+        SELECT id
+        FROM import_batches
+        WHERE file_sha256 = $1
+      `,
       [sha256],
     );
 
@@ -152,6 +152,7 @@ export class ExamResultImportService {
 
     for (const candidate of document.candidates) {
       const status = candidate.resultStatus || 'EMPTY';
+
       byResult[status] = (byResult[status] ?? 0) + 1;
       totalParts += candidate.parts.length;
     }
@@ -179,7 +180,9 @@ export class ExamResultImportService {
 
   async confirm(file: Express.Multer.File | undefined, userId: number) {
     const { document, sha256 } = this.read(file);
+
     const photos = extractStudentPhotoMap(file!.buffer, 'SAT_HACH');
+
     const validation = await this.validateCandidates(document);
 
     if (validation.unmatched.length || validation.conflicts.length) {
@@ -191,14 +194,14 @@ export class ExamResultImportService {
     }
 
     return this.dataSource.transaction(async (manager) => {
-      // Khóa kỳ thi để tránh hai phiên import kết quả cùng lúc.
+      // Khóa kỳ thi để tránh import đồng thời.
       const locked: IdRow[] = await manager.query(
         `
           SELECT id
           FROM examination_sessions
           WHERE id = $1
           FOR UPDATE
-          `,
+        `,
         [validation.sessionId],
       );
 
@@ -208,23 +211,23 @@ export class ExamResultImportService {
 
       const batchRows: IdRow[] = await manager.query(
         `
-            INSERT INTO import_batches (
-              type,
-              file_name,
-              file_sha256,
-              file_size,
-              report_code,
-              source_transaction_code,
-              total_records,
-              imported_by
-            )
-            VALUES (
-              'EXAM_RESULT',
-              $1, $2, $3, $4, $5, $6, $7
-            )
-            ON CONFLICT (file_sha256) DO NOTHING
-            RETURNING id
-            `,
+          INSERT INTO import_batches (
+            type,
+            file_name,
+            file_sha256,
+            file_size,
+            report_code,
+            source_transaction_code,
+            total_records,
+            imported_by
+          )
+          VALUES (
+            'EXAM_RESULT',
+            $1, $2, $3, $4, $5, $6, $7
+          )
+          ON CONFLICT (file_sha256) DO NOTHING
+          RETURNING id
+        `,
         [
           file!.originalname,
           sha256,
@@ -242,21 +245,21 @@ export class ExamResultImportService {
 
       const batchId = Number(batchRows[0].id);
 
-      // Đối chiếu lại trong transaction.
+      // Đối chiếu lại bên trong transaction.
       const stored: StoredCandidate[] = await manager.query(
         `
-            SELECT
-              ec.id,
-              ec.student_id AS "studentId",
-              ec.registration_code AS "registrationCode",
-              ec.examination_number AS "examinationNumber",
-              st.full_name AS "fullName",
-              st.identity_number AS "identityNumber"
-            FROM examination_candidates ec
-            JOIN students st ON st.id = ec.student_id
-            WHERE ec.examination_session_id = $1
-            FOR UPDATE OF ec
-            `,
+          SELECT
+            ec.id,
+            ec.student_id AS "studentId",
+            ec.registration_code AS "registrationCode",
+            ec.examination_number AS "examinationNumber",
+            st.full_name AS "fullName",
+            st.identity_number AS "identityNumber"
+          FROM examination_candidates ec
+          JOIN students st ON st.id = ec.student_id
+          WHERE ec.examination_session_id = $1
+          FOR UPDATE OF ec
+        `,
         [validation.sessionId],
       );
 
@@ -319,7 +322,7 @@ export class ExamResultImportService {
               result_updated_at = NOW(),
               updated_at = NOW()
             WHERE id = $1
-            `,
+          `,
           [
             current.id,
             candidate.resultStatus,
@@ -330,12 +333,12 @@ export class ExamResultImportService {
           ],
         );
 
-        // KQSH mới cho cùng kỳ và thí sinh sẽ thay thế bộ chi tiết cũ.
+        // Kết quả mới thay thế chi tiết phần thi cũ.
         await manager.query(
           `
             DELETE FROM examination_candidate_results
             WHERE examination_candidate_id = $1
-            `,
+          `,
           [current.id],
         );
 
@@ -360,7 +363,7 @@ export class ExamResultImportService {
                 $1, $2, $3, $4, $5::date,
                 $6, $7, $8, $9, $10
               )
-              `,
+            `,
             [
               current.id,
               index + 1,
@@ -379,6 +382,7 @@ export class ExamResultImportService {
         }
 
         const status = candidate.resultStatus || 'EMPTY';
+
         resultCounts[status] = (resultCounts[status] ?? 0) + 1;
       }
 
@@ -394,6 +398,10 @@ export class ExamResultImportService {
     });
   }
 
+  /**
+   * Danh sách kỳ sát hạch.
+   * "absent" đếm từng thí sinh, không đếm số phần thi.
+   */
   async sessions() {
     return this.dataSource.query(
       `
@@ -403,28 +411,56 @@ export class ExamResultImportService {
           es.exam_date AS "examDate",
           ec.code AS "centerCode",
           ec.name AS "centerName",
+
           COUNT(c.id)::int AS "totalCandidates",
+
           COUNT(c.id) FILTER (
             WHERE c.result_import_id IS NOT NULL
           )::int AS "withResults",
+
           COUNT(c.id) FILTER (
             WHERE c.result_status = 'DA'
           )::int AS "passed",
+
           COUNT(c.id) FILTER (
             WHERE c.result_status = 'RO'
-          )::int AS "failed"
+          )::int AS "failed",
+
+          COUNT(c.id) FILTER (
+            WHERE c.result_status = 'VA'
+               OR EXISTS (
+                 SELECT 1
+                 FROM examination_candidate_results r
+                 WHERE r.examination_candidate_id = c.id
+                   AND r.result_status = 'VA'
+               )
+          )::int AS "absent"
+
         FROM examination_sessions es
+
         JOIN examination_centers ec
           ON ec.id = es.examination_center_id
+
         LEFT JOIN examination_candidates c
           ON c.examination_session_id = es.id
+
         GROUP BY es.id, ec.id
-        ORDER BY es.exam_date DESC NULLS LAST, es.id DESC
+
+        ORDER BY
+          es.exam_date DESC NULLS LAST,
+          es.id DESC
+
         LIMIT 200
-        `,
+      `,
     );
   }
 
+  /**
+   * Trả danh sách kết quả và thống kê.
+   *
+   * Bộ lọc VA tìm các thí sinh có ít nhất một phần thi
+   * vắng hoặc trạng thái tổng là VA.
+   */
   async results(
     sessionCode: string,
     params: {
@@ -449,11 +485,14 @@ export class ExamResultImportService {
           es.exam_date AS "examDate",
           ec.code AS "centerCode",
           ec.name AS "centerName"
+
         FROM examination_sessions es
+
         JOIN examination_centers ec
           ON ec.id = es.examination_center_id
+
         WHERE es.code = $1
-        `,
+      `,
       [sessionCode],
     );
 
@@ -476,37 +515,70 @@ export class ExamResultImportService {
     };
 
     const page = safeNumber(params.page, 1, 1_000_000);
+
     const limit = safeNumber(params.limit, 20, 100);
+
     const search = (params.search ?? '').trim().slice(0, 150);
+
     const status = (params.status ?? '').trim();
+
     const candidateType = (params.candidateType ?? '').trim();
 
     const values: unknown[] = [session.id, search, status, candidateType];
 
     const where = `
-        WHERE c.examination_session_id = $1
-          AND (
-            $2 = ''
-            OR c.registration_code ILIKE '%' || $2 || '%'
-            OR COALESCE(c.examination_number, '') ILIKE '%' || $2 || '%'
-            OR st.full_name ILIKE '%' || $2 || '%'
-            OR COALESCE(st.identity_number, '') ILIKE '%' || $2 || '%'
-          )
-          AND (
-            $3 = ''
-            OR ($3 = 'PENDING' AND c.result_import_id IS NULL)
-            OR c.result_status = $3
-          )
-          AND ($4 = '' OR c.candidate_type = $4)
-      `;
+      WHERE c.examination_session_id = $1
 
-    const counts: Array<{ total: string }> = await this.dataSource.query(
+        AND (
+          $2 = ''
+          OR c.registration_code ILIKE '%' || $2 || '%'
+          OR COALESCE(c.examination_number, '') ILIKE '%' || $2 || '%'
+          OR st.full_name ILIKE '%' || $2 || '%'
+          OR COALESCE(st.identity_number, '') ILIKE '%' || $2 || '%'
+        )
+
+        AND (
+          $3 = ''
+
+          OR (
+            $3 = 'PENDING'
+            AND c.result_import_id IS NULL
+          )
+
+          OR (
+            $3 = 'VA'
+            AND (
+              c.result_status = 'VA'
+              OR EXISTS (
+                SELECT 1
+                FROM examination_candidate_results ar
+                WHERE ar.examination_candidate_id = c.id
+                  AND ar.result_status = 'VA'
+              )
+            )
+          )
+
+          OR (
+            $3 NOT IN ('VA', 'PENDING')
+            AND c.result_status = $3
+          )
+        )
+
+        AND (
+          $4 = ''
+          OR c.candidate_type = $4
+        )
+    `;
+
+    const counts: Array<{
+      total: string;
+    }> = await this.dataSource.query(
       `
-          SELECT COUNT(*)::text AS total
-          FROM examination_candidates c
-          JOIN students st ON st.id = c.student_id
-          ${where}
-          `,
+        SELECT COUNT(*)::text AS total
+        FROM examination_candidates c
+        JOIN students st ON st.id = c.student_id
+        ${where}
+      `,
       values,
     );
 
@@ -522,14 +594,32 @@ export class ExamResultImportService {
           c.theory_score AS "theoryScore",
           c.practical_score AS "practicalScore",
           c.road_score AS "roadScore",
-          (c.result_import_id IS NOT NULL) AS "hasResult",
+
+          (
+            c.result_import_id IS NOT NULL
+          ) AS "hasResult",
+
+          (
+            c.result_status = 'VA'
+            OR EXISTS (
+              SELECT 1
+              FROM examination_candidate_results ar
+              WHERE ar.examination_candidate_id = c.id
+                AND ar.result_status = 'VA'
+            )
+          ) AS "hasAbsentPart",
+
           st.id AS "studentId",
-          (st.photo_id IS NOT NULL) AS "hasPhoto",
+          (
+            st.photo_id IS NOT NULL
+          ) AS "hasPhoto",
           st.full_name AS "fullName",
           st.identity_number AS "identityNumber",
+
           s.code AS "schoolCode",
           s.name AS "schoolName",
           course.code AS "courseCode",
+
           COALESCE((
             SELECT jsonb_agg(
               jsonb_build_object(
@@ -543,21 +633,31 @@ export class ExamResultImportService {
               )
               ORDER BY r.part_order
             )
+
             FROM examination_candidate_results r
+
             WHERE r.examination_candidate_id = c.id
           ), '[]'::jsonb) AS parts
+
         FROM examination_candidates c
-        JOIN students st ON st.id = c.student_id
+
+        JOIN students st
+          ON st.id = c.student_id
+
         LEFT JOIN training_schools s
           ON s.id = c.training_school_id
+
         LEFT JOIN courses course
           ON course.id = c.course_id
+
         ${where}
+
         ORDER BY
           c.examination_number ASC NULLS LAST,
           c.id ASC
+
         LIMIT $5 OFFSET $6
-        `,
+      `,
       [...values, limit, (page - 1) * limit],
     );
 
@@ -566,26 +666,43 @@ export class ExamResultImportService {
       withResults: number;
       passed: number;
       failed: number;
+      absent: number;
       independent: number;
     }> = await this.dataSource.query(
       `
         SELECT
           COUNT(*)::int AS total,
+
           COUNT(*) FILTER (
-            WHERE result_import_id IS NOT NULL
+            WHERE c.result_import_id IS NOT NULL
           )::int AS "withResults",
+
           COUNT(*) FILTER (
-            WHERE result_status = 'DA'
+            WHERE c.result_status = 'DA'
           )::int AS passed,
+
           COUNT(*) FILTER (
-            WHERE result_status = 'RO'
+            WHERE c.result_status = 'RO'
           )::int AS failed,
+
           COUNT(*) FILTER (
-            WHERE candidate_type = 'independent'
+            WHERE c.result_status = 'VA'
+               OR EXISTS (
+                 SELECT 1
+                 FROM examination_candidate_results r
+                 WHERE r.examination_candidate_id = c.id
+                   AND r.result_status = 'VA'
+               )
+          )::int AS absent,
+
+          COUNT(*) FILTER (
+            WHERE c.candidate_type = 'independent'
           )::int AS independent
-        FROM examination_candidates
-        WHERE examination_session_id = $1
-        `,
+
+        FROM examination_candidates c
+
+        WHERE c.examination_session_id = $1
+      `,
       [session.id],
     );
 
@@ -613,11 +730,15 @@ export class ExamResultImportService {
           report_code AS "sessionCode",
           total_records AS "totalCandidates",
           imported_at AS "importedAt"
+
         FROM import_batches
+
         WHERE type = 'EXAM_RESULT'
+
         ORDER BY id DESC
+
         LIMIT 100
-        `,
+      `,
     );
   }
 }

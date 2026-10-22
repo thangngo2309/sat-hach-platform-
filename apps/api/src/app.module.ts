@@ -50,6 +50,8 @@ import { ExaminationCenterService } from './business/catalog/examination-center.
 import { TrainingSchoolManagementController } from './business/catalog/training-school-management.controller.js';
 import { StudentPhotoController } from './business/students/student-photo.controller.js';
 import { StudentPhotoService } from './business/students/student-photo.service.js';
+import { StudentManagementController } from './business/students/student-management.controller.js';
+import { StudentManagementService } from './business/students/student-management.service.js';
 
 const businessEntities = [
   User,
@@ -105,7 +107,8 @@ const businessEntities = [
     TrainingSchoolManagementController,
     ExamListImportController,
     ExamResultImportController,
-    StudentPhotoController
+    StudentPhotoController,
+    StudentManagementController
   ],
 
   providers: [
@@ -121,7 +124,8 @@ const businessEntities = [
     ExaminationCenterService,
     ExamListImportService,
     ExamResultImportService,
-    StudentPhotoService
+    StudentPhotoService,
+    StudentManagementService
   ],
 })
 export class AppModule {}
