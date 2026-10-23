@@ -90,7 +90,7 @@ const mainItems: MenuEntry[] = [
   },
   {
     label: "Báo cáo thống kê",
-    href: "/reports",
+    href: "/exam-statistics",
     icon: AssessmentOutlined,
   },
 ];
@@ -116,31 +116,31 @@ const importItems: MenuEntry[] = [
     href: "/imports/exam-result",
     icon: DriveFolderUploadOutlined,
   },
-  {
-    label: "Lịch sử BC1",
-    href: "/import-history",
-    icon: HistoryOutlined,
-  },
-  {
-    label: "Lịch sử BC2",
-    href: "/imports/bc2/history",
-    icon: HistoryOutlined,
-  },
+  // {
+  //   label: "Lịch sử BC1",
+  //   href: "/import-history",
+  //   icon: HistoryOutlined,
+  // },
+  // {
+  //   label: "Lịch sử BC2",
+  //   href: "/imports/bc2/history",
+  //   icon: HistoryOutlined,
+  // },
 ];
 
 const systemItems: MenuEntry[] = [
-  {
-    label: "Quản lý tài khoản",
-    href: "/users",
-    icon: PeopleOutlineOutlined,
-    superAdminOnly: true,
-  },
-  {
-    label: "Cài đặt",
-    href: "/settings",
-    icon: SettingsOutlined,
-    superAdminOnly: true,
-  },
+  // {
+  //   label: "Quản lý tài khoản",
+  //   href: "/users",
+  //   icon: PeopleOutlineOutlined,
+  //   superAdminOnly: true,
+  // },
+  // {
+  //   label: "Cài đặt",
+  //   href: "/settings",
+  //   icon: SettingsOutlined,
+  //   superAdminOnly: true,
+  // },
 ];
 
 const allItems = [...mainItems, ...importItems, ...systemItems];

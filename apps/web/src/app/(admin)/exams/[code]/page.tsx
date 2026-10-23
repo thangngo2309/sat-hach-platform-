@@ -37,11 +37,22 @@ import {
 import { useAuth } from "@/components/auth/AuthProvider";
 import { StudentAvatar } from "@/components/students/StudentAvatar";
 
+import { ExportExcelButton } from "@/components/common/ExportExcelButton";
+import { exportExamDetailExcel } from "@/lib/exam-detail-export";
+
 import {
   getExamResults,
   type ExamResultsPage,
   type ExamResultCandidate,
 } from "@/lib/exam-results";
+
+function formatDate(value: string | null | undefined) {
+  if (!value) return "—";
+
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
+
+  return match ? `${match[3]}/${match[2]}/${match[1]}` : value;
+}
 
 function ResultChip({
   status,
@@ -72,10 +83,12 @@ function ResultChip({
 function CandidateRow({ item }: { item: ExamResultCandidate }) {
   const [expanded, setExpanded] = useState(false);
 
+  const parts = Array.isArray(item.parts) ? item.parts : [];
+
   const hasAbsentPart =
     item.hasAbsentPart === true ||
     item.resultStatus === "VA" ||
-    item.parts.some((part) => part.resultStatus === "VA");
+    parts.some((part) => part.resultStatus === "VA");
 
   return (
     <>
@@ -89,7 +102,7 @@ function CandidateRow({ item }: { item: ExamResultCandidate }) {
             : undefined
         }
       >
-        <TableCell>
+        <TableCell sx={{ width: 48 }}>
           <IconButton
             size="small"
             onClick={() => setExpanded((current) => !current)}
@@ -105,25 +118,26 @@ function CandidateRow({ item }: { item: ExamResultCandidate }) {
           </IconButton>
         </TableCell>
 
-        <TableCell>{item.examinationNumber ?? "—"}</TableCell>
+        <TableCell sx={{ whiteSpace: "nowrap" }}>
+          {item.examinationNumber ?? "—"}
+        </TableCell>
 
         <TableCell>
           <Stack
             direction="row"
-            spacing={1.5}
-            sx={{
-              alignItems: "center",
-              minWidth: 190,
-            }}
+            sx={{ minWidth: 190, spacing: 1.5, alignItems: "center" }}
           >
-            <StudentAvatar
-              studentId={item.studentId}
-              fullName={item.fullName}
-              size={44}
-            />
+            <Box sx={{ flexShrink: 0 }}>
+              <StudentAvatar
+                studentId={item.studentId}
+                fullName={item.fullName}
+                size={44}
+              />
+            </Box>
 
             <Box sx={{ minWidth: 0 }}>
               <Typography
+                variant="body2"
                 sx={{
                   fontWeight: 700,
                   overflowWrap: "anywhere",
@@ -132,7 +146,14 @@ function CandidateRow({ item }: { item: ExamResultCandidate }) {
                 {item.fullName}
               </Typography>
 
-              <Typography variant="caption" color="text.secondary">
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{
+                  display: "block",
+                  overflowWrap: "anywhere",
+                }}
+              >
                 {item.registrationCode}
               </Typography>
 
@@ -194,7 +215,7 @@ function CandidateRow({ item }: { item: ExamResultCandidate }) {
               sx={{
                 px: { xs: 1.5, md: 3 },
                 py: 2,
-                bgcolor: "#f8fafc",
+                bgcolor: "action.hover",
               }}
             >
               <Typography
@@ -217,7 +238,7 @@ function CandidateRow({ item }: { item: ExamResultCandidate }) {
               {hasAbsentPart && (
                 <Alert severity="warning" sx={{ mb: 2 }}>
                   Thí sinh có ít nhất một phần thi được ghi nhận trạng thái vắng
-                  (VA). Vui lòng kiểm tra các phần thi bên dưới.
+                  (VA).
                 </Alert>
               )}
 
@@ -235,7 +256,7 @@ function CandidateRow({ item }: { item: ExamResultCandidate }) {
                   </TableHead>
 
                   <TableBody>
-                    {item.parts.map((part) => (
+                    {parts.map((part) => (
                       <TableRow
                         key={part.id}
                         sx={
@@ -247,22 +268,17 @@ function CandidateRow({ item }: { item: ExamResultCandidate }) {
                         }
                       >
                         <TableCell>{part.partOrder}</TableCell>
-
                         <TableCell>{part.examType}</TableCell>
-
-                        <TableCell>{part.examDate ?? "—"}</TableCell>
-
+                        <TableCell>{formatDate(part.examDate)}</TableCell>
                         <TableCell>{part.score ?? "—"}</TableCell>
-
                         <TableCell>{part.maximumScore ?? "—"}</TableCell>
-
                         <TableCell>
                           <ResultChip status={part.resultStatus} />
                         </TableCell>
                       </TableRow>
                     ))}
 
-                    {!item.parts.length && (
+                    {!parts.length && (
                       <TableRow>
                         <TableCell colSpan={6} align="center">
                           Chưa có dữ liệu phần thi.
@@ -281,10 +297,7 @@ function CandidateRow({ item }: { item: ExamResultCandidate }) {
 }
 
 export default function ExamDetailPage() {
-  const params = useParams<{
-    code: string;
-  }>();
-
+  const params = useParams<{ code: string }>();
   const code = params.code;
 
   const { accessToken } = useAuth();
@@ -294,15 +307,12 @@ export default function ExamDetailPage() {
   const [page, setPage] = useState(1);
 
   const [searchInput, setSearchInput] = useState("");
-
   const [search, setSearch] = useState("");
 
   const [status, setStatus] = useState("");
-
   const [candidateType, setCandidateType] = useState("");
 
   const [loading, setLoading] = useState(true);
-
   const [error, setError] = useState("");
 
   const load = useCallback(async () => {
@@ -372,23 +382,52 @@ export default function ExamDetailPage() {
   ];
 
   return (
-    <Stack spacing={3}>
-      <Box>
-        <Typography variant="h5" sx={{ fontWeight: 800 }}>
-          Kết quả kỳ sát hạch {code}
-        </Typography>
+    <Stack spacing={3} sx={{ minWidth: 0, maxWidth: "100%" }}>
+      {/* HEADER + EXPORT */}
+      <Stack
+        direction={{ xs: "column", sm: "row" }}
+        sx={{
+          justifyContent: "space-between",
+          alignItems: {
+            xs: "stretch",
+            sm: "center",
+          },
+          spacing: 2,
+        }}
+      >
+        <Box sx={{ minWidth: 0 }}>
+          <Typography variant="h5" sx={{ fontWeight: 800 }}>
+            Kết quả kỳ sát hạch {code}
+          </Typography>
 
-        <Typography color="text.secondary">
-          {result?.session.centerName ||
-            result?.session.centerCode ||
-            "Trung tâm sát hạch"}
-          {" · "}
-          {result?.session.examDate ?? "Chưa có ngày thi"}
-        </Typography>
-      </Box>
+          <Typography color="text.secondary">
+            {result?.session.centerName ||
+              result?.session.centerCode ||
+              "Trung tâm sát hạch"}
+            {" · "}
+            {formatDate(result?.session.examDate)}
+          </Typography>
+        </Box>
+
+        <ExportExcelButton
+          disabled={!accessToken || !result || loading}
+          onExport={async () => {
+            if (!accessToken) {
+              throw new Error("Phiên đăng nhập đã hết hạn.");
+            }
+
+            await exportExamDetailExcel(accessToken, code, {
+              search,
+              status,
+              candidateType,
+            });
+          }}
+        />
+      </Stack>
 
       {error && <Alert severity="error">{error}</Alert>}
 
+      {/* SUMMARY */}
       <Box
         sx={{
           display: "grid",
@@ -401,7 +440,11 @@ export default function ExamDetailPage() {
         }}
       >
         {stats.map((stat) => (
-          <Card variant="outlined" key={stat.label}>
+          <Card
+            variant="outlined"
+            key={stat.label}
+            sx={{ minWidth: 0, borderRadius: 2.5 }}
+          >
             <CardContent>
               <Typography variant="caption" color="text.secondary">
                 {stat.label}
@@ -428,7 +471,8 @@ export default function ExamDetailPage() {
         tổng thí sinh.
       </Typography>
 
-      <Card variant="outlined">
+      {/* FILTERS */}
+      <Card variant="outlined" sx={{ borderRadius: 3 }}>
         <CardContent>
           <Stack
             direction={{
@@ -441,14 +485,17 @@ export default function ExamDetailPage() {
               size="small"
               label="Tên, CCCD, SBD, mã đăng ký"
               value={searchInput}
-              onChange={(e) => setSearchInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
+              onChange={(event) => setSearchInput(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
                   setPage(1);
                   setSearch(searchInput.trim());
                 }
               }}
-              sx={{ flex: 1 }}
+              sx={{
+                flex: 1,
+                minWidth: { md: 220 },
+              }}
               slotProps={{
                 input: {
                   endAdornment: (
@@ -467,55 +514,66 @@ export default function ExamDetailPage() {
               }}
             />
 
-            <FormControl size="small" sx={{ minWidth: 170 }}>
+            <FormControl size="small" sx={{ minWidth: { md: 170 } }}>
               <InputLabel>Kết quả</InputLabel>
 
               <Select
                 label="Kết quả"
                 value={status}
-                onChange={(e) => {
-                  setStatus(e.target.value);
+                onChange={(event) => {
+                  setStatus(event.target.value);
                   setPage(1);
                 }}
               >
                 <MenuItem value="">Tất cả</MenuItem>
-
                 <MenuItem value="DA">Đạt</MenuItem>
-
                 <MenuItem value="RO">Không đạt</MenuItem>
-
                 <MenuItem value="VA">Vắng</MenuItem>
-
                 <MenuItem value="PENDING">Chưa có kết quả</MenuItem>
               </Select>
             </FormControl>
 
-            <FormControl size="small" sx={{ minWidth: 170 }}>
+            <FormControl size="small" sx={{ minWidth: { md: 170 } }}>
               <InputLabel>Loại thí sinh</InputLabel>
 
               <Select
                 label="Loại thí sinh"
                 value={candidateType}
-                onChange={(e) => {
-                  setCandidateType(e.target.value);
+                onChange={(event) => {
+                  setCandidateType(event.target.value);
                   setPage(1);
                 }}
               >
                 <MenuItem value="">Tất cả</MenuItem>
-
                 <MenuItem value="training">Học viên CSDT</MenuItem>
-
                 <MenuItem value="independent">Thí sinh tự do</MenuItem>
-
                 <MenuItem value="unknown">Chưa xác định</MenuItem>
               </Select>
             </FormControl>
           </Stack>
+
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            sx={{ display: "block", mt: 1.5 }}
+          >
+            Excel sẽ xuất toàn bộ thí sinh phù hợp bộ lọc, không chỉ các dòng
+            trên trang hiện tại.
+          </Typography>
         </CardContent>
       </Card>
 
-      <Card variant="outlined">
-        <CardContent>
+      {/* RESULTS TABLE */}
+      <Card
+        variant="outlined"
+        sx={{
+          borderRadius: 3,
+          minWidth: 0,
+          maxWidth: "100%",
+          overflow: "hidden",
+        }}
+      >
+        <CardContent sx={{ minWidth: 0 }}>
           <Typography
             sx={{
               fontWeight: 700,
@@ -537,26 +595,33 @@ export default function ExamDetailPage() {
             </Box>
           )}
 
-          <TableContainer>
-            <Table sx={{ minWidth: 1000 }}>
+          <TableContainer
+            sx={{
+              width: "100%",
+              maxWidth: "100%",
+              overflowX: "auto",
+            }}
+          >
+            <Table
+              size="small"
+              sx={{
+                minWidth: 1000,
+                "& .MuiTableCell-head": {
+                  whiteSpace: "nowrap",
+                  fontWeight: 700,
+                },
+              }}
+            >
               <TableHead>
                 <TableRow>
                   <TableCell />
-
                   <TableCell>SBD</TableCell>
-
                   <TableCell>Học viên</TableCell>
-
                   <TableCell>Cơ sở đào tạo</TableCell>
-
                   <TableCell>Hạng</TableCell>
-
                   <TableCell align="center">Lý thuyết</TableCell>
-
                   <TableCell align="center">Hình</TableCell>
-
                   <TableCell align="center">Đường</TableCell>
-
                   <TableCell>Kết quả</TableCell>
                 </TableRow>
               </TableHead>
