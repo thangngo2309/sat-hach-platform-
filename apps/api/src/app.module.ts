@@ -54,6 +54,8 @@ import { StudentManagementController } from './business/students/student-managem
 import { StudentManagementService } from './business/students/student-management.service.js';
 import { ExamStatisticsController } from './business/exam-statistics/exam-statistics.controller.js';
 import { ExamStatisticsService } from './business/exam-statistics/exam-statistics.service.js';
+import { DashboardController } from './business/dashboard/dashboard.controller.js';
+import { DashboardService } from './business/dashboard/dashboard.service.js';
 
 const businessEntities = [
   User,
@@ -111,7 +113,8 @@ const businessEntities = [
     ExamResultImportController,
     StudentPhotoController,
     StudentManagementController,
-    ExamStatisticsController
+    ExamStatisticsController,
+    DashboardController
   ],
 
   providers: [
@@ -129,7 +132,8 @@ const businessEntities = [
     ExamResultImportService,
     StudentPhotoService,
     StudentManagementService,
-    ExamStatisticsService
+    ExamStatisticsService,
+    DashboardService
   ],
 })
 export class AppModule {}
