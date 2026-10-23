@@ -7,7 +7,6 @@ export type ExamStatisticsCourse = {
   schoolCode: string;
   schoolName: string;
 };
-
 export type ExamStatisticsSession = {
   id: number;
   code: string;
@@ -16,13 +15,11 @@ export type ExamStatisticsSession = {
   centerName: string | null;
   totalCandidates: number;
 };
-
 export type ExamStatisticsFilters = {
   years: Array<{ year: number }>;
   courses: ExamStatisticsCourse[];
   sessions: ExamStatisticsSession[];
 };
-
 export type ExamStatisticsSummary = {
   totalStudents: number;
   passed: number;
@@ -33,7 +30,6 @@ export type ExamStatisticsSummary = {
   totalStudentSessions: number;
   totalResultSessions: number;
 };
-
 export type ExamPartStatistics = {
   examType: string;
   totalRecords: number;
@@ -42,7 +38,6 @@ export type ExamPartStatistics = {
   absent: number;
   studentCount: number;
 };
-
 export type StudentPartStatistics = {
   examType: string;
   totalRecords: number;
@@ -50,7 +45,6 @@ export type StudentPartStatistics = {
   failed: number;
   absent: number;
 };
-
 export type ExamStatisticsStudent = {
   id: number;
   hasPhoto: boolean;
@@ -68,12 +62,13 @@ export type ExamStatisticsStudent = {
   latestResultStatus: string | null;
   parts: StudentPartStatistics[];
 };
-
 export type ExamStatisticsReport = {
   filters: {
     year: number;
     courseId: number | null;
     sessionId: number | null;
+    fromDate?: string;
+    toDate?: string;
   };
   summary: ExamStatisticsSummary;
   parts: ExamPartStatistics[];
@@ -85,7 +80,6 @@ export type ExamStatisticsReport = {
     totalPages: number;
   };
 };
-
 export type ExamStatisticsHistoryPart = {
   id: number;
   examType: string;
@@ -95,7 +89,6 @@ export type ExamStatisticsHistoryPart = {
   maximumScore: string | null;
   examDate: string | null;
 };
-
 export type ExamStatisticsHistoryItem = {
   id: number;
   sessionId: number;
@@ -110,21 +103,20 @@ export type ExamStatisticsHistoryItem = {
   inSelectedSession: boolean;
   parts: ExamStatisticsHistoryPart[];
 };
-
 export type ExamStatisticsStudentHistory = {
   studentId: number;
   history: ExamStatisticsHistoryItem[];
 };
-
 export type ExamStatisticsParams = {
   year: number;
   courseId?: number | null;
   sessionId?: number | null;
+  fromDate?: string;
+  toDate?: string;
   page?: number;
   limit?: number;
   search?: string;
 };
-
 export type ExamStatisticsFilterParams = {
   year?: number;
   courseId?: number | null;
@@ -132,18 +124,13 @@ export type ExamStatisticsFilterParams = {
 
 async function request<T>(token: string, path: string): Promise<T> {
   const response = await fetch(`${API_URL}/exam-statistics${path}`, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
+    headers: { Authorization: `Bearer ${token}` },
     credentials: "include",
     cache: "no-store",
   });
-
   const json = await response.json().catch(() => null);
-
   if (!response.ok) {
     const raw = json?.message;
-
     throw new ApiError(
       Array.isArray(raw)
         ? raw.join(", ")
@@ -153,7 +140,6 @@ async function request<T>(token: string, path: string): Promise<T> {
       response.status
     );
   }
-
   return json as T;
 }
 
@@ -162,49 +148,30 @@ export function getExamStatisticsFilters(
   params: ExamStatisticsFilterParams = {}
 ) {
   const query = new URLSearchParams();
-
-  if (params.year) {
-    query.set("year", String(params.year));
-  }
-
-  if (params.courseId) {
-    query.set("courseId", String(params.courseId));
-  }
-
+  if (params.year) query.set("year", String(params.year));
+  if (params.courseId) query.set("courseId", String(params.courseId));
   const suffix = query.toString() ? `?${query.toString()}` : "";
-
   return request<ExamStatisticsFilters>(token, `/filters${suffix}`);
 }
-
 function makeQuery(params: ExamStatisticsParams) {
   const query = new URLSearchParams({
     year: String(params.year),
     page: String(params.page ?? 1),
     limit: String(params.limit ?? 20),
   });
-
-  if (params.courseId) {
-    query.set("courseId", String(params.courseId));
-  }
-
-  if (params.sessionId) {
-    query.set("sessionId", String(params.sessionId));
-  }
-
-  if (params.search?.trim()) {
-    query.set("search", params.search.trim());
-  }
-
+  if (params.courseId) query.set("courseId", String(params.courseId));
+  if (params.sessionId) query.set("sessionId", String(params.sessionId));
+  if (params.fromDate) query.set("fromDate", params.fromDate);
+  if (params.toDate) query.set("toDate", params.toDate);
+  if (params.search?.trim()) query.set("search", params.search.trim());
   return query.toString();
 }
-
 export function getExamStatisticsReport(
   token: string,
   params: ExamStatisticsParams
 ) {
   return request<ExamStatisticsReport>(token, `/report?${makeQuery(params)}`);
 }
-
 export function getExamStatisticsStudentHistory(
   token: string,
   id: number,

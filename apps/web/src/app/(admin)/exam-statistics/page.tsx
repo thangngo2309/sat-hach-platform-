@@ -217,8 +217,8 @@ function PartsTable({ items }: { items: ExamPartStatistics[] }) {
         </Typography>
 
         <Typography variant="caption" color="text.secondary">
-          Thống kê các lượt Đạt, Không đạt và Vắng theo từng phần thi trong năm,
-          khóa đào tạo và kỳ sát hạch đã chọn.
+          Thống kê các lượt Đạt, Không đạt và Vắng theo từng phần thi trong
+          khoảng thời gian và kỳ sát hạch đã chọn.
         </Typography>
       </Box>
 
@@ -523,12 +523,16 @@ function StudentResultsTable({
 function HistoryItem({
   item,
   order,
+  fromDate,
+  toDate,
 }: {
   item: ExamStatisticsHistoryItem;
   order: number;
+  fromDate: string;
+  toDate: string;
 }) {
   const selected =
-    item.inSelectedYear && item.inSelectedCourse && item.inSelectedSession;
+    inPeriod(item.examDate, fromDate, toDate) && item.inSelectedSession;
 
   return (
     <Card
@@ -617,6 +621,44 @@ function HistoryItem({
   );
 }
 
+type ReportPeriod = "year" | "quarter" | "month" | "range";
+
+function periodDates(
+  period: ReportPeriod,
+  year: number,
+  quarter: number,
+  month: number,
+  from: string,
+  to: string
+) {
+  if (period === "range") return { fromDate: from, toDate: to };
+  const startMonth =
+    period === "quarter"
+      ? (quarter - 1) * 3 + 1
+      : period === "month"
+      ? month
+      : 1;
+  const endMonth =
+    period === "quarter" ? startMonth + 2 : period === "month" ? month : 12;
+  const lastDay = new Date(year, endMonth, 0).getDate();
+  return {
+    fromDate: `${year}-${String(startMonth).padStart(2, "0")}-01`,
+    toDate: `${year}-${String(endMonth).padStart(2, "0")}-${String(
+      lastDay
+    ).padStart(2, "0")}`,
+  };
+}
+
+function inPeriod(
+  date: string | null | undefined,
+  fromDate: string,
+  toDate: string
+) {
+  if (!date) return false;
+  const day = date.slice(0, 10);
+  return day >= fromDate && day <= toDate;
+}
+
 // ============================================================
 // MAIN PAGE
 // ============================================================
@@ -628,7 +670,24 @@ export default function ExamStatisticsPage() {
 
   const [year, setYear] = useState(new Date().getFullYear());
 
-  const [courseId, setCourseId] = useState<number | null>(null);
+  const [period, setPeriod] = useState<ReportPeriod>("year");
+  const [quarter, setQuarter] = useState(1);
+  const [month, setMonth] = useState(new Date().getMonth() + 1);
+  const [customFromDate, setCustomFromDate] = useState(
+    `${new Date().getFullYear()}-01-01`
+  );
+  const [customToDate, setCustomToDate] = useState(
+    `${new Date().getFullYear()}-12-31`
+  );
+  const { fromDate, toDate } = periodDates(
+    period,
+    year,
+    quarter,
+    month,
+    customFromDate,
+    customToDate
+  );
+  const rangeInvalid = !fromDate || !toDate || fromDate > toDate;
 
   const [sessionId, setSessionId] = useState<number | null>(null);
 
@@ -657,60 +716,55 @@ export default function ExamStatisticsPage() {
 
   const [historyError, setHistoryError] = useState("");
 
-  // ==========================================================
-  // LOAD FILTER OPTIONS
-  // ==========================================================
-
+  // Danh sách kỳ được tải toàn bộ, sau đó lọc theo khoảng ngày ở giao diện.
   useEffect(() => {
     if (!accessToken) return;
-
     let active = true;
-
     setFiltersLoading(true);
-
-    void getExamStatisticsFilters(accessToken, {
-      year,
-      courseId,
-    })
+    void getExamStatisticsFilters(accessToken)
       .then((result) => {
-        if (!active) return;
-
-        setOptions(result);
-
-        if (
-          sessionId !== null &&
-          !result.sessions.some((session) => session.id === sessionId)
-        ) {
-          setSessionId(null);
-          setPage(1);
-        }
+        if (active) setOptions(result);
       })
       .catch((err: unknown) => {
-        if (!active) return;
-
-        setError(
-          err instanceof Error
-            ? err.message
-            : "Không thể tải danh sách kỳ sát hạch."
-        );
+        if (active)
+          setError(
+            err instanceof Error
+              ? err.message
+              : "Không thể tải danh sách kỳ sát hạch."
+          );
       })
       .finally(() => {
-        if (active) {
-          setFiltersLoading(false);
-        }
+        if (active) setFiltersLoading(false);
       });
-
     return () => {
       active = false;
     };
-  }, [accessToken, year, courseId, sessionId]);
+  }, [accessToken, reload]);
+
+  const availableSessions = (options?.sessions ?? []).filter((session) =>
+    inPeriod(session.examDate, fromDate, toDate)
+  );
+  const selectedSession = availableSessions.find(
+    (item) => item.id === sessionId
+  );
+
+  useEffect(() => {
+    if (
+      sessionId !== null &&
+      options &&
+      !availableSessions.some((session) => session.id === sessionId)
+    ) {
+      setSessionId(null);
+      setPage(1);
+    }
+  }, [sessionId, options, fromDate, toDate]);
 
   // ==========================================================
   // LOAD REPORT
   // ==========================================================
 
   const load = useCallback(async () => {
-    if (!accessToken) return;
+    if (!accessToken || rangeInvalid) return;
 
     setLoading(true);
     setError("");
@@ -718,7 +772,8 @@ export default function ExamStatisticsPage() {
     try {
       const data = await getExamStatisticsReport(accessToken, {
         year,
-        courseId,
+        fromDate,
+        toDate,
         sessionId,
         page,
         limit: 20,
@@ -733,7 +788,17 @@ export default function ExamStatisticsPage() {
     } finally {
       setLoading(false);
     }
-  }, [accessToken, year, courseId, sessionId, page, search, reload]);
+  }, [
+    accessToken,
+    year,
+    fromDate,
+    toDate,
+    sessionId,
+    page,
+    search,
+    reload,
+    rangeInvalid,
+  ]);
 
   useEffect(() => {
     void load();
@@ -757,7 +822,8 @@ export default function ExamStatisticsPage() {
         student.id,
         {
           year,
-          courseId,
+          fromDate,
+          toDate,
           sessionId,
         }
       );
@@ -824,35 +890,32 @@ export default function ExamStatisticsPage() {
           </Typography>
 
           <Typography color="text.secondary" sx={{ mt: 0.5 }}>
-            Theo năm, khóa đào tạo, kỳ sát hạch và kết quả từng phần thi.
+            Theo năm, quý, tháng hoặc khoảng ngày; theo kỳ sát hạch và kết quả
+            từng phần thi.
           </Typography>
         </Box>
 
         <ExportExcelButton
-          disabled={!accessToken || loading || filtersLoading}
+          disabled={!accessToken || loading || filtersLoading || rangeInvalid}
           onExport={async () => {
             if (!accessToken) return;
 
-            const course = options?.courses.find(
-              (item) => item.id === courseId
-            );
-
-            const session = options?.sessions.find(
-              (item) => item.id === sessionId
-            );
+            if (rangeInvalid) throw new Error("Khoảng thời gian không hợp lệ.");
+            const session = selectedSession;
 
             await exportExamStatisticsExcel(
               accessToken,
               {
                 year,
-                courseId,
+                fromDate,
+                toDate,
                 sessionId,
                 search,
               },
               {
-                courseName: course
-                  ? `${course.code} - ${course.schoolName}`
-                  : "Tất cả khóa đào tạo",
+                courseName: `Thời gian: ${formatDate(fromDate)} - ${formatDate(
+                  toDate
+                )}`,
                 sessionName: session
                   ? `${session.code} - ${formatDate(session.examDate)}`
                   : "Tất cả kỳ sát hạch",
@@ -897,106 +960,149 @@ export default function ExamStatisticsPage() {
             display: "grid",
             gridTemplateColumns: {
               xs: "1fr",
-              sm: "repeat(2, minmax(0, 1fr))",
-              lg: "160px minmax(220px, 1fr) minmax(250px, 1fr)",
+              sm: "repeat(2, minmax(0,1fr))",
+              lg: "repeat(4, minmax(0,1fr))",
             },
             gap: 2,
-            alignItems: "start",
           }}
         >
-          {/* NĂM */}
           <TextField
             select
             size="small"
-            label="Năm sát hạch"
-            value={year}
+            label="Kiểu báo cáo"
+            value={period}
             onChange={(event) => {
-              setYear(Number(event.target.value));
-              setCourseId(null);
+              setPeriod(event.target.value as ReportPeriod);
               setSessionId(null);
               setPage(1);
             }}
             fullWidth
           >
-            {(options?.years ?? []).map((item) => (
-              <MenuItem key={item.year} value={item.year}>
-                {item.year}
-              </MenuItem>
-            ))}
-
-            {!options?.years.some((item) => item.year === year) && (
-              <MenuItem value={year}>{year}</MenuItem>
-            )}
+            <MenuItem value="year">Theo năm</MenuItem>
+            <MenuItem value="quarter">Theo quý</MenuItem>
+            <MenuItem value="month">Theo tháng</MenuItem>
+            <MenuItem value="range">Từ ngày đến ngày</MenuItem>
           </TextField>
-
-          {/* KHÓA ĐÀO TẠO */}
-          <TextField
-            select
-            size="small"
-            label="Khóa đào tạo"
-            value={courseId === null ? "" : String(courseId)}
-            onChange={(event) => {
-              const value = event.target.value;
-
-              setCourseId(value ? Number(value) : null);
-
-              setSessionId(null);
-              setPage(1);
-            }}
-            fullWidth
-            slotProps={{
-              select: {
-                displayEmpty: false,
-              },
-            }}
-          >
-            <MenuItem value="">Tất cả khóa đào tạo</MenuItem>
-
-            {(options?.courses ?? []).map((course) => (
-              <MenuItem key={course.id} value={String(course.id)}>
-                <Box sx={{ minWidth: 0 }}>
-                  <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                    {course.code}
-                  </Typography>
-
-                  <Typography variant="caption" color="text.secondary">
-                    {course.schoolName}
-                  </Typography>
-                </Box>
-              </MenuItem>
-            ))}
-          </TextField>
-
-          {/* KỲ SÁT HẠCH */}
+          {period !== "range" && (
+            <TextField
+              select
+              size="small"
+              label="Năm sát hạch"
+              value={year}
+              fullWidth
+              onChange={(event) => {
+                setYear(Number(event.target.value));
+                setSessionId(null);
+                setPage(1);
+              }}
+            >
+              {[
+                ...new Set([
+                  year,
+                  ...(options?.years ?? []).map((item) => item.year),
+                ]),
+              ]
+                .sort((a, b) => b - a)
+                .map((value) => (
+                  <MenuItem key={value} value={value}>
+                    {value}
+                  </MenuItem>
+                ))}
+            </TextField>
+          )}
+          {period === "quarter" && (
+            <TextField
+              select
+              size="small"
+              label="Quý"
+              value={quarter}
+              fullWidth
+              onChange={(event) => {
+                setQuarter(Number(event.target.value));
+                setSessionId(null);
+                setPage(1);
+              }}
+            >
+              {[1, 2, 3, 4].map((value) => (
+                <MenuItem key={value} value={value}>
+                  Quý {value}
+                </MenuItem>
+              ))}
+            </TextField>
+          )}
+          {period === "month" && (
+            <TextField
+              select
+              size="small"
+              label="Tháng"
+              value={month}
+              fullWidth
+              onChange={(event) => {
+                setMonth(Number(event.target.value));
+                setSessionId(null);
+                setPage(1);
+              }}
+            >
+              {Array.from({ length: 12 }, (_, i) => i + 1).map((value) => (
+                <MenuItem key={value} value={value}>
+                  Tháng {value}
+                </MenuItem>
+              ))}
+            </TextField>
+          )}
+          {period === "range" && (
+            <>
+              <TextField
+                size="small"
+                type="date"
+                label="Từ ngày"
+                value={customFromDate}
+                fullWidth
+                slotProps={{ inputLabel: { shrink: true } }}
+                onChange={(event) => {
+                  setCustomFromDate(event.target.value);
+                  setSessionId(null);
+                  setPage(1);
+                }}
+              />
+              <TextField
+                size="small"
+                type="date"
+                label="Đến ngày"
+                value={customToDate}
+                fullWidth
+                slotProps={{ inputLabel: { shrink: true } }}
+                onChange={(event) => {
+                  setCustomToDate(event.target.value);
+                  setSessionId(null);
+                  setPage(1);
+                }}
+              />
+            </>
+          )}
           <TextField
             select
             size="small"
             label="Kỳ sát hạch"
             value={sessionId === null ? "" : String(sessionId)}
+            fullWidth
+            disabled={filtersLoading || rangeInvalid}
             onChange={(event) => {
-              const value = event.target.value;
-
-              setSessionId(value ? Number(value) : null);
-
+              setSessionId(
+                event.target.value ? Number(event.target.value) : null
+              );
               setPage(1);
             }}
-            fullWidth
-            disabled={filtersLoading}
           >
             <MenuItem value="">Tất cả kỳ sát hạch</MenuItem>
-
-            {(options?.sessions ?? []).map((session) => (
+            {availableSessions.map((session) => (
               <MenuItem key={session.id} value={String(session.id)}>
                 <Box sx={{ minWidth: 0 }}>
                   <Typography variant="body2" sx={{ fontWeight: 700 }}>
-                    {session.code}
-                    {" · "}
-                    {formatDate(session.examDate)}
+                    {session.code} · {formatDate(session.examDate)}
                   </Typography>
-
                   <Typography variant="caption" color="text.secondary">
-                    {session.centerName || session.centerCode}
-                    {" · "}
+                    {session.centerName || session.centerCode} ·{" "}
                     {formatNumber(session.totalCandidates)} thí sinh
                   </Typography>
                 </Box>
@@ -1004,6 +1110,44 @@ export default function ExamStatisticsPage() {
             ))}
           </TextField>
         </Box>
+        <Box
+          sx={{
+            mt: 2,
+            display: "grid",
+            gridTemplateColumns: { xs: "1fr", md: "repeat(2,minmax(0,1fr))" },
+            gap: 2,
+          }}
+        >
+          <TextField
+            size="small"
+            label="Khoảng thời gian áp dụng"
+            value={
+              rangeInvalid
+                ? "Không hợp lệ"
+                : `${formatDate(fromDate)} — ${formatDate(toDate)}`
+            }
+            disabled
+            fullWidth
+          />
+          <TextField
+            size="small"
+            label="Cơ sở sát hạch"
+            value={
+              selectedSession
+                ? selectedSession.centerName ||
+                  selectedSession.centerCode ||
+                  "Chưa xác định"
+                : "Tất cả cơ sở sát hạch"
+            }
+            disabled
+            fullWidth
+          />
+        </Box>
+        {rangeInvalid && (
+          <Alert severity="warning" sx={{ mt: 2 }}>
+            Ngày bắt đầu phải nhỏ hơn hoặc bằng ngày kết thúc.
+          </Alert>
+        )}
 
         {filtersLoading && (
           <Stack
@@ -1018,9 +1162,9 @@ export default function ExamStatisticsPage() {
           </Stack>
         )}
 
-        {!filtersLoading && options && options.sessions.length === 0 && (
+        {!filtersLoading && options && availableSessions.length === 0 && (
           <Alert severity="info" sx={{ mt: 2 }}>
-            Không có kỳ sát hạch nào phù hợp với năm và khóa đào tạo đã chọn.
+            Không có kỳ sát hạch trong khoảng thời gian đã chọn.
           </Alert>
         )}
       </Card>
@@ -1197,12 +1341,18 @@ export default function ExamStatisticsPage() {
           ) : (
             <Stack spacing={1.5}>
               <Alert severity="info">
-                Hiển thị toàn bộ lịch sử của học viên. Các kỳ không thuộc năm,
-                khóa đào tạo hoặc kỳ sát hạch đang chọn sẽ được đánh dấu riêng.
+                Hiển thị toàn bộ lịch sử của học viên. Các kỳ ngoài phạm vi thời
+                gian hoặc kỳ sát hạch đang chọn được đánh dấu riêng.
               </Alert>
 
               {history.map((item, index) => (
-                <HistoryItem key={item.id} item={item} order={index + 1} />
+                <HistoryItem
+                  key={item.id}
+                  item={item}
+                  order={index + 1}
+                  fromDate={fromDate}
+                  toDate={toDate}
+                />
               ))}
 
               {!history.length && (

@@ -44,6 +44,8 @@ import { StudentFormDialog } from "@/components/students/StudentFormDialog";
 import {
   getStudentDetail,
   listStudents,
+  listCourseSummaries,
+  type CourseSummary,
   type StudentDetail,
   type StudentExamHistory,
   type StudentExamStatus,
@@ -52,6 +54,7 @@ import {
 } from "@/lib/bc2-view";
 
 import type { StudentFormData } from "@/lib/student-management";
+import { API_URL } from "@/lib/auth";
 
 type Bc2Status = "all" | "has_bc2" | "no_bc2";
 
@@ -539,18 +542,20 @@ function StudentTable({
                       Chi tiết
                     </Button>
 
-                    <Button
-                      size="small"
-                      color="inherit"
-                      startIcon={<EditOutlined fontSize="small" />}
-                      onClick={() => onEdit(student.id)}
-                      sx={{
-                        minWidth: 100,
-                        textTransform: "none",
-                      }}
-                    >
-                      Sửa
-                    </Button>
+                    {!hasBc2 && (
+                      <Button
+                        size="small"
+                        color="inherit"
+                        startIcon={<EditOutlined fontSize="small" />}
+                        onClick={() => onEdit(student.id)}
+                        sx={{
+                          minWidth: 100,
+                          textTransform: "none",
+                        }}
+                      >
+                        Sửa
+                      </Button>
+                    )}
                   </Stack>
                 </TableCell>
               </TableRow>
@@ -938,7 +943,76 @@ export default function StudentsPage() {
   const searchParams = useSearchParams();
 
   const schoolId = Number(searchParams.get("schoolId") || 0);
-  const courseId = Number(searchParams.get("courseId") || 0);
+  const urlCourseId = Number(searchParams.get("courseId") || 0);
+  const [selectedCourseId, setSelectedCourseId] = useState(urlCourseId);
+  const [bc1Code, setBc1Code] = useState("");
+  const [courseOptions, setCourseOptions] = useState<CourseSummary[]>([]);
+  const [courseLoading, setCourseLoading] = useState(false);
+  const [courseError, setCourseError] = useState("");
+
+  useEffect(() => {
+    setSelectedCourseId(urlCourseId);
+    setBc1Code("");
+    setPage(1);
+  }, [urlCourseId]);
+
+  useEffect(() => {
+    if (!accessToken) return;
+
+    let cancelled = false;
+    setCourseLoading(true);
+    setCourseError("");
+
+    const fetchCourses = async () => {
+      const collected: CourseSummary[] = [];
+      let currentPage = 1;
+      let totalPages = 1;
+
+      do {
+        const response = await listCourseSummaries(accessToken, {
+          page: currentPage,
+          limit: 100,
+          schoolId: schoolId || undefined,
+        });
+        if (cancelled) return;
+        collected.push(...response.data);
+        totalPages = response.pagination.totalPages;
+        currentPage += 1;
+      } while (currentPage <= totalPages);
+
+      if (!cancelled) setCourseOptions(collected);
+    };
+
+    void fetchCourses()
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setCourseError(
+            error instanceof Error
+              ? error.message
+              : "Không thể tải danh sách khóa học."
+          );
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setCourseLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [accessToken, schoolId]);
+
+  const bc1Options = [
+    ...new Set(
+      courseOptions
+        .map((course) => course.bc1Code)
+        .filter((value): value is string => Boolean(value))
+    ),
+  ].sort((a, b) => a.localeCompare(b, "vi"));
+
+  const visibleCourses = bc1Code
+    ? courseOptions.filter((course) => course.bc1Code === bc1Code)
+    : courseOptions;
 
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
@@ -975,15 +1049,41 @@ export default function StudentsPage() {
     setError("");
 
     try {
-      const response = await listStudents(accessToken, {
+      const filters = {
         page,
         limit: 20,
         search,
         schoolId: schoolId || undefined,
-        courseId: courseId || undefined,
+        courseId: selectedCourseId || undefined,
         bc2Status: status,
         examStatus,
-      });
+      };
+
+      // bc1Code requires corresponding server-side support in Bc2ViewService.students().
+      // This keeps pagination and summary consistent; no client-side page filtering.
+      let response: StudentsPageResult;
+      if (bc1Code) {
+        const query = new URLSearchParams({
+          page: String(filters.page),
+          limit: String(filters.limit),
+          bc1Code,
+          bc2Status: filters.bc2Status,
+          examStatus: filters.examStatus,
+        });
+        if (filters.search) query.set("search", filters.search);
+        if (filters.schoolId) query.set("schoolId", String(filters.schoolId));
+        if (filters.courseId) query.set("courseId", String(filters.courseId));
+
+        const res = await fetch(`${API_URL}/bc2-view/students?${query}`, {
+          headers: { Authorization: `Bearer ${accessToken}` },
+          credentials: "include",
+          cache: "no-store",
+        });
+        if (!res.ok) throw new Error("Không thể lọc học viên theo BC1.");
+        response = (await res.json()) as StudentsPageResult;
+      } else {
+        response = await listStudents(accessToken, filters);
+      }
 
       setResult({
         ...response,
@@ -1005,7 +1105,8 @@ export default function StudentsPage() {
     page,
     search,
     schoolId,
-    courseId,
+    selectedCourseId,
+    bc1Code,
     status,
     examStatus,
     reload,
@@ -1137,6 +1238,7 @@ export default function StudentsPage() {
       </Stack>
 
       {error && <Alert severity="error">{error}</Alert>}
+      {courseError && <Alert severity="warning">{courseError}</Alert>}
 
       {/* SUMMARY */}
       <SummaryCards summary={result?.summary ?? null} />
@@ -1149,86 +1251,142 @@ export default function StudentsPage() {
           borderRadius: 3,
         }}
       >
-        <Stack
-          component="form"
-          direction={{ xs: "column", md: "row" }}
-          spacing={1.5}
-          onSubmit={(event) => {
-            event.preventDefault();
-            setSearch(searchInput.trim());
-            setPage(1);
-          }}
-        >
-          <TextField
-            size="small"
-            label="Họ tên, mã đăng ký, CCCD"
-            value={searchInput}
-            onChange={(event) => setSearchInput(event.target.value)}
-            sx={{ flex: 1, minWidth: { md: 200 } }}
-          />
-
-          <TextField
-            select
-            size="small"
-            label="Trạng thái BC2"
-            value={status}
-            onChange={(event) => {
-              setStatus(event.target.value as Bc2Status);
-              setPage(1);
-            }}
-            sx={{ minWidth: { md: 165 } }}
-          >
-            <MenuItem value="all">Tất cả BC2</MenuItem>
-            <MenuItem value="has_bc2">Đã có BC2</MenuItem>
-            <MenuItem value="no_bc2">Chưa có BC2</MenuItem>
-          </TextField>
-
-          <TextField
-            select
-            size="small"
-            label="Kết quả sát hạch"
-            value={examStatus}
-            onChange={(event) => {
-              setExamStatus(event.target.value as ExamFilter);
-              setPage(1);
-            }}
-            sx={{ minWidth: { md: 170 } }}
-          >
-            <MenuItem value="all">Tất cả kết quả</MenuItem>
-            <MenuItem value="passed">Đã đậu</MenuItem>
-            <MenuItem value="failed">Chưa đậu</MenuItem>
-            <MenuItem value="pending">Chờ kết quả</MenuItem>
-            <MenuItem value="not_examined">Chưa dự thi</MenuItem>
-            <MenuItem value="absent">Từng vắng</MenuItem>
-            <MenuItem value="retake">Từ 2 kỳ trở lên</MenuItem>
-          </TextField>
-
-          <Button
-            type="submit"
-            variant="contained"
-            startIcon={<SearchOutlined />}
+        <Stack spacing={1.5}>
+          <Box
             sx={{
-              textTransform: "none",
-              px: 2.5,
+              display: "grid",
+              gridTemplateColumns: {
+                xs: "1fr",
+                md: "repeat(2, minmax(0, 1fr))",
+              },
+              gap: 1.5,
             }}
           >
-            Tìm kiếm
-          </Button>
-        </Stack>
+            <TextField
+              select
+              size="small"
+              fullWidth
+              label="BC1"
+              value={bc1Code}
+              disabled={courseLoading}
+              onChange={(event) => {
+                setBc1Code(event.target.value);
+                setSelectedCourseId(0);
+                setPage(1);
+              }}
+            >
+              <MenuItem value="">Tất cả BC1</MenuItem>
+              {bc1Options.map((code) => (
+                <MenuItem key={code} value={code}>
+                  {code}
+                </MenuItem>
+              ))}
+            </TextField>
+            <TextField
+              select
+              size="small"
+              fullWidth
+              label="Khóa đào tạo"
+              value={selectedCourseId ? String(selectedCourseId) : ""}
+              disabled={courseLoading}
+              onChange={(event) => {
+                setSelectedCourseId(Number(event.target.value) || 0);
+                setPage(1);
+              }}
+            >
+              <MenuItem value="">Tất cả khóa đào tạo</MenuItem>
+              {visibleCourses.map((course) => (
+                <MenuItem key={course.id} value={String(course.id)}>
+                  {course.code}
+                  {course.name && course.name !== course.code
+                    ? ` — ${course.name}`
+                    : ""}
+                </MenuItem>
+              ))}
+            </TextField>
+          </Box>
+          <Stack
+            component="form"
+            direction={{ xs: "column", md: "row" }}
+            spacing={1.5}
+            onSubmit={(event) => {
+              event.preventDefault();
+              setSearch(searchInput.trim());
+              setPage(1);
+            }}
+          >
+            <TextField
+              size="small"
+              label="Họ tên, mã đăng ký, CCCD"
+              value={searchInput}
+              onChange={(event) => setSearchInput(event.target.value)}
+              sx={{ flex: 1, minWidth: { md: 200 } }}
+            />
 
-        <Typography
-          variant="caption"
-          color="text.secondary"
-          sx={{ display: "block", mt: 1.5 }}
-        >
-          Tìm thấy{" "}
-          <strong>
-            {(result?.pagination.total ?? 0).toLocaleString("vi-VN")}
-          </strong>{" "}
-          học viên
-          {courseId > 0 ? " · Đang lọc theo khóa học" : ""}
-          {schoolId > 0 ? " · Đang lọc theo trường" : ""}
-        </Typography>
+            <TextField
+              select
+              size="small"
+              label="Trạng thái BC2"
+              value={status}
+              onChange={(event) => {
+                setStatus(event.target.value as Bc2Status);
+                setPage(1);
+              }}
+              sx={{ minWidth: { md: 165 } }}
+            >
+              <MenuItem value="all">Tất cả BC2</MenuItem>
+              <MenuItem value="has_bc2">Đã có BC2</MenuItem>
+              <MenuItem value="no_bc2">Chưa có BC2</MenuItem>
+            </TextField>
+
+            <TextField
+              select
+              size="small"
+              label="Kết quả sát hạch"
+              value={examStatus}
+              onChange={(event) => {
+                setExamStatus(event.target.value as ExamFilter);
+                setPage(1);
+              }}
+              sx={{ minWidth: { md: 170 } }}
+            >
+              <MenuItem value="all">Tất cả kết quả</MenuItem>
+              <MenuItem value="passed">Đã đậu</MenuItem>
+              <MenuItem value="failed">Chưa đậu</MenuItem>
+              <MenuItem value="pending">Chờ kết quả</MenuItem>
+              <MenuItem value="not_examined">Chưa dự thi</MenuItem>
+              <MenuItem value="absent">Từng vắng</MenuItem>
+              <MenuItem value="retake">Từ 2 kỳ trở lên</MenuItem>
+            </TextField>
+
+            <Button
+              type="submit"
+              variant="contained"
+              startIcon={<SearchOutlined />}
+              sx={{
+                textTransform: "none",
+                px: 2.5,
+              }}
+            >
+              Tìm kiếm
+            </Button>
+          </Stack>
+
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            sx={{ display: "block", mt: 1.5 }}
+          >
+            Tìm thấy{" "}
+            <strong>
+              {(result?.pagination.total ?? 0).toLocaleString("vi-VN")}
+            </strong>{" "}
+            học viên
+            {selectedCourseId > 0 ? " · Đang lọc theo khóa học" : ""}
+            {bc1Code ? ` · BC1: ${bc1Code}` : ""}
+            {schoolId > 0 ? " · Đang lọc theo trường" : ""}
+          </Typography>
+        </Stack>
       </Card>
 
       {/* TABLE */}
