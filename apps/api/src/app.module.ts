@@ -56,6 +56,8 @@ import { ExamStatisticsController } from './business/exam-statistics/exam-statis
 import { ExamStatisticsService } from './business/exam-statistics/exam-statistics.service.js';
 import { DashboardController } from './business/dashboard/dashboard.controller.js';
 import { DashboardService } from './business/dashboard/dashboard.service.js';
+import { CsdtReportsController } from './business/csdt-reports/csdt-reports.controller.js';
+import { CsdtReportsService } from './business/csdt-reports/csdt-reports.service.js';
 
 const businessEntities = [
   User,
@@ -114,7 +116,8 @@ const businessEntities = [
     StudentPhotoController,
     StudentManagementController,
     ExamStatisticsController,
-    DashboardController
+    DashboardController,
+    CsdtReportsController
   ],
 
   providers: [
@@ -133,7 +136,8 @@ const businessEntities = [
     StudentPhotoService,
     StudentManagementService,
     ExamStatisticsService,
-    DashboardService
+    DashboardService,
+    CsdtReportsService
   ],
 })
 export class AppModule {}

@@ -17,12 +17,14 @@ import {
   MenuItem,
   Pagination,
   Stack,
+  Tab,
   Table,
   TableBody,
   TableCell,
   TableContainer,
   TableHead,
   TableRow,
+  Tabs,
   TextField,
   Typography,
 } from "@mui/material";
@@ -36,6 +38,8 @@ import {
 
 import { useAuth } from "@/components/auth/AuthProvider";
 import { StudentAvatar } from "@/components/students/StudentAvatar";
+import { ExportExcelButton } from "@/components/common/ExportExcelButton";
+import { CsdtReportsPanel } from "@/components/reports/CsdtReportsPanel";
 
 import {
   getExamStatisticsFilters,
@@ -47,12 +51,10 @@ import {
   type ExamStatisticsReport,
   type ExamStatisticsStudent,
 } from "@/lib/exam-statistics";
-import { exportExamStatisticsExcel } from "@/lib/exam-statistics-export";
-import { ExportExcelButton } from "@/components/common/ExportExcelButton";
 
-// ============================================================
-// HELPERS
-// ============================================================
+import { exportExamStatisticsExcel } from "@/lib/exam-statistics-export";
+
+type ReportPeriod = "year" | "quarter" | "month" | "range";
 
 function formatDate(value?: string | null) {
   if (!value) return "—";
@@ -81,6 +83,54 @@ function partName(code: string) {
   return names[code.toUpperCase()] ?? code;
 }
 
+function periodDates(
+  period: ReportPeriod,
+  year: number,
+  quarter: number,
+  month: number,
+  from: string,
+  to: string
+) {
+  if (period === "range") {
+    return {
+      fromDate: from,
+      toDate: to,
+    };
+  }
+
+  const startMonth =
+    period === "quarter"
+      ? (quarter - 1) * 3 + 1
+      : period === "month"
+      ? month
+      : 1;
+
+  const endMonth =
+    period === "quarter" ? startMonth + 2 : period === "month" ? month : 12;
+
+  const lastDay = new Date(Date.UTC(year, endMonth, 0)).getUTCDate();
+
+  return {
+    fromDate: `${year}-${String(startMonth).padStart(2, "0")}-01`,
+
+    toDate:
+      `${year}-${String(endMonth).padStart(2, "0")}-` +
+      String(lastDay).padStart(2, "0"),
+  };
+}
+
+function inPeriod(
+  value: string | null | undefined,
+  fromDate: string,
+  toDate: string
+) {
+  if (!value) return false;
+
+  const date = value.slice(0, 10);
+
+  return date >= fromDate && date <= toDate;
+}
+
 function StatusChip({ status }: { status: string | null }) {
   if (status === "DA" || status === "passed") {
     return <Chip size="small" color="success" label="Đạt" />;
@@ -102,10 +152,6 @@ function StatusChip({ status }: { status: string | null }) {
     />
   );
 }
-
-// ============================================================
-// SUMMARY CARDS
-// ============================================================
 
 function SummaryCards({
   data,
@@ -197,10 +243,6 @@ function SummaryCards({
   );
 }
 
-// ============================================================
-// PART STATISTICS
-// ============================================================
-
 function PartsTable({ items }: { items: ExamPartStatistics[] }) {
   return (
     <Card
@@ -217,8 +259,8 @@ function PartsTable({ items }: { items: ExamPartStatistics[] }) {
         </Typography>
 
         <Typography variant="caption" color="text.secondary">
-          Thống kê các lượt Đạt, Không đạt và Vắng theo từng phần thi trong
-          khoảng thời gian và kỳ sát hạch đã chọn.
+          Thống kê Đạt, Không đạt và Vắng theo từng phần thi trong phạm vi đang
+          chọn.
         </Typography>
       </Box>
 
@@ -329,10 +371,6 @@ function PartsTable({ items }: { items: ExamPartStatistics[] }) {
     </Card>
   );
 }
-
-// ============================================================
-// STUDENT RESULTS TABLE
-// ============================================================
 
 function StudentResultsTable({
   items,
@@ -516,10 +554,6 @@ function StudentResultsTable({
   );
 }
 
-// ============================================================
-// STUDENT HISTORY DETAIL
-// ============================================================
-
 function HistoryItem({
   item,
   order,
@@ -549,7 +583,10 @@ function HistoryItem({
         sx={{
           spacing: 1,
           justifyContent: "space-between",
-          alignItems: { xs: "flex-start", sm: "center" },
+          alignItems: {
+            xs: "flex-start",
+            sm: "center",
+          },
         }}
       >
         <Box>
@@ -621,64 +658,29 @@ function HistoryItem({
   );
 }
 
-type ReportPeriod = "year" | "quarter" | "month" | "range";
-
-function periodDates(
-  period: ReportPeriod,
-  year: number,
-  quarter: number,
-  month: number,
-  from: string,
-  to: string
-) {
-  if (period === "range") return { fromDate: from, toDate: to };
-  const startMonth =
-    period === "quarter"
-      ? (quarter - 1) * 3 + 1
-      : period === "month"
-      ? month
-      : 1;
-  const endMonth =
-    period === "quarter" ? startMonth + 2 : period === "month" ? month : 12;
-  const lastDay = new Date(year, endMonth, 0).getDate();
-  return {
-    fromDate: `${year}-${String(startMonth).padStart(2, "0")}-01`,
-    toDate: `${year}-${String(endMonth).padStart(2, "0")}-${String(
-      lastDay
-    ).padStart(2, "0")}`,
-  };
-}
-
-function inPeriod(
-  date: string | null | undefined,
-  fromDate: string,
-  toDate: string
-) {
-  if (!date) return false;
-  const day = date.slice(0, 10);
-  return day >= fromDate && day <= toDate;
-}
-
-// ============================================================
-// MAIN PAGE
-// ============================================================
-
 export default function ExamStatisticsPage() {
   const { accessToken, loading: authLoading } = useAuth();
+
+  const [activeReportTab, setActiveReportTab] = useState(0);
 
   const [options, setOptions] = useState<ExamStatisticsFilters | null>(null);
 
   const [year, setYear] = useState(new Date().getFullYear());
 
   const [period, setPeriod] = useState<ReportPeriod>("year");
+
   const [quarter, setQuarter] = useState(1);
+
   const [month, setMonth] = useState(new Date().getMonth() + 1);
+
   const [customFromDate, setCustomFromDate] = useState(
     `${new Date().getFullYear()}-01-01`
   );
+
   const [customToDate, setCustomToDate] = useState(
     `${new Date().getFullYear()}-12-31`
   );
+
   const { fromDate, toDate } = periodDates(
     period,
     year,
@@ -687,24 +689,20 @@ export default function ExamStatisticsPage() {
     customFromDate,
     customToDate
   );
+
   const rangeInvalid = !fromDate || !toDate || fromDate > toDate;
 
   const [sessionId, setSessionId] = useState<number | null>(null);
 
   const [page, setPage] = useState(1);
-
   const [searchInput, setSearchInput] = useState("");
-
   const [search, setSearch] = useState("");
-
   const [reload, setReload] = useState(0);
 
   const [report, setReport] = useState<ExamStatisticsReport | null>(null);
 
   const [loading, setLoading] = useState(false);
-
   const [filtersLoading, setFiltersLoading] = useState(false);
-
   const [error, setError] = useState("");
 
   const [selectedStudent, setSelectedStudent] =
@@ -716,36 +714,40 @@ export default function ExamStatisticsPage() {
 
   const [historyError, setHistoryError] = useState("");
 
-  // Danh sách kỳ được tải toàn bộ, sau đó lọc theo khoảng ngày ở giao diện.
   useEffect(() => {
-    if (!accessToken) return;
+    if (!accessToken || activeReportTab !== 0) return;
+
     let active = true;
     setFiltersLoading(true);
+
     void getExamStatisticsFilters(accessToken)
-      .then((result) => {
-        if (active) setOptions(result);
+      .then((response) => {
+        if (active) setOptions(response);
       })
       .catch((err: unknown) => {
-        if (active)
-          setError(
-            err instanceof Error
-              ? err.message
-              : "Không thể tải danh sách kỳ sát hạch."
-          );
+        if (!active) return;
+
+        setError(
+          err instanceof Error
+            ? err.message
+            : "Không thể tải danh sách kỳ sát hạch."
+        );
       })
       .finally(() => {
         if (active) setFiltersLoading(false);
       });
+
     return () => {
       active = false;
     };
-  }, [accessToken, reload]);
+  }, [accessToken, activeReportTab, reload]);
 
   const availableSessions = (options?.sessions ?? []).filter((session) =>
     inPeriod(session.examDate, fromDate, toDate)
   );
+
   const selectedSession = availableSessions.find(
-    (item) => item.id === sessionId
+    (session) => session.id === sessionId
   );
 
   useEffect(() => {
@@ -759,12 +761,10 @@ export default function ExamStatisticsPage() {
     }
   }, [sessionId, options, fromDate, toDate]);
 
-  // ==========================================================
-  // LOAD REPORT
-  // ==========================================================
-
   const load = useCallback(async () => {
-    if (!accessToken || rangeInvalid) return;
+    if (!accessToken || rangeInvalid || activeReportTab !== 0) {
+      return;
+    }
 
     setLoading(true);
     setError("");
@@ -798,15 +798,12 @@ export default function ExamStatisticsPage() {
     search,
     reload,
     rangeInvalid,
+    activeReportTab,
   ]);
 
   useEffect(() => {
     void load();
   }, [load]);
-
-  // ==========================================================
-  // OPEN STUDENT HISTORY
-  // ==========================================================
 
   const openStudent = async (student: ExamStatisticsStudent) => {
     if (!accessToken) return;
@@ -845,10 +842,6 @@ export default function ExamStatisticsPage() {
     }
   };
 
-  // ==========================================================
-  // AUTH LOADING
-  // ==========================================================
-
   if (authLoading) {
     return (
       <Box
@@ -863,507 +856,542 @@ export default function ExamStatisticsPage() {
     );
   }
 
-  // ==========================================================
-  // RENDER
-  // ==========================================================
-
   return (
-    <Stack
-      spacing={2.5}
-      sx={{
-        minWidth: 0,
-        maxWidth: "100%",
-      }}
-    >
-      {/* HEADER */}
-      <Stack
-        direction={{ xs: "column", sm: "row" }}
-        sx={{
-          justifyContent: "space-between",
-          alignItems: { xs: "flex-start", sm: "center" },
-          spacing: 2,
-        }}
-      >
-        <Box>
-          <Typography variant="h5" sx={{ fontWeight: 800 }}>
-            Thống kê sát hạch
-          </Typography>
-
-          <Typography color="text.secondary" sx={{ mt: 0.5 }}>
-            Theo năm, quý, tháng hoặc khoảng ngày; theo kỳ sát hạch và kết quả
-            từng phần thi.
-          </Typography>
-        </Box>
-
-        <ExportExcelButton
-          disabled={!accessToken || loading || filtersLoading || rangeInvalid}
-          onExport={async () => {
-            if (!accessToken) return;
-
-            if (rangeInvalid) throw new Error("Khoảng thời gian không hợp lệ.");
-            const session = selectedSession;
-
-            await exportExamStatisticsExcel(
-              accessToken,
-              {
-                year,
-                fromDate,
-                toDate,
-                sessionId,
-                search,
-              },
-              {
-                courseName: `Thời gian: ${formatDate(fromDate)} - ${formatDate(
-                  toDate
-                )}`,
-                sessionName: session
-                  ? `${session.code} - ${formatDate(session.examDate)}`
-                  : "Tất cả kỳ sát hạch",
-              }
-            );
-          }}
-        />
-
-        <Button
-          variant="outlined"
-          startIcon={<RefreshOutlined />}
-          disabled={loading || filtersLoading}
-          onClick={() => setReload((value) => value + 1)}
-          sx={{ textTransform: "none" }}
-        >
-          Tải lại
-        </Button>
-      </Stack>
-
-      {error && <Alert severity="error">{error}</Alert>}
-
-      {/* FILTERS */}
+    <Stack spacing={2.5} sx={{ minWidth: 0, maxWidth: "100%" }}>
+      {/* Hai báo cáo trong cùng trang */}
       <Card
         variant="outlined"
         sx={{
           borderRadius: 3,
-          p: 2,
-        }}
-      >
-        <Typography
-          variant="subtitle2"
-          sx={{
-            fontWeight: 700,
-            mb: 2,
-          }}
-        >
-          Bộ lọc thống kê
-        </Typography>
-
-        <Box
-          sx={{
-            display: "grid",
-            gridTemplateColumns: {
-              xs: "1fr",
-              sm: "repeat(2, minmax(0,1fr))",
-              lg: "repeat(4, minmax(0,1fr))",
-            },
-            gap: 2,
-          }}
-        >
-          <TextField
-            select
-            size="small"
-            label="Kiểu báo cáo"
-            value={period}
-            onChange={(event) => {
-              setPeriod(event.target.value as ReportPeriod);
-              setSessionId(null);
-              setPage(1);
-            }}
-            fullWidth
-          >
-            <MenuItem value="year">Theo năm</MenuItem>
-            <MenuItem value="quarter">Theo quý</MenuItem>
-            <MenuItem value="month">Theo tháng</MenuItem>
-            <MenuItem value="range">Từ ngày đến ngày</MenuItem>
-          </TextField>
-          {period !== "range" && (
-            <TextField
-              select
-              size="small"
-              label="Năm sát hạch"
-              value={year}
-              fullWidth
-              onChange={(event) => {
-                setYear(Number(event.target.value));
-                setSessionId(null);
-                setPage(1);
-              }}
-            >
-              {[
-                ...new Set([
-                  year,
-                  ...(options?.years ?? []).map((item) => item.year),
-                ]),
-              ]
-                .sort((a, b) => b - a)
-                .map((value) => (
-                  <MenuItem key={value} value={value}>
-                    {value}
-                  </MenuItem>
-                ))}
-            </TextField>
-          )}
-          {period === "quarter" && (
-            <TextField
-              select
-              size="small"
-              label="Quý"
-              value={quarter}
-              fullWidth
-              onChange={(event) => {
-                setQuarter(Number(event.target.value));
-                setSessionId(null);
-                setPage(1);
-              }}
-            >
-              {[1, 2, 3, 4].map((value) => (
-                <MenuItem key={value} value={value}>
-                  Quý {value}
-                </MenuItem>
-              ))}
-            </TextField>
-          )}
-          {period === "month" && (
-            <TextField
-              select
-              size="small"
-              label="Tháng"
-              value={month}
-              fullWidth
-              onChange={(event) => {
-                setMonth(Number(event.target.value));
-                setSessionId(null);
-                setPage(1);
-              }}
-            >
-              {Array.from({ length: 12 }, (_, i) => i + 1).map((value) => (
-                <MenuItem key={value} value={value}>
-                  Tháng {value}
-                </MenuItem>
-              ))}
-            </TextField>
-          )}
-          {period === "range" && (
-            <>
-              <TextField
-                size="small"
-                type="date"
-                label="Từ ngày"
-                value={customFromDate}
-                fullWidth
-                slotProps={{ inputLabel: { shrink: true } }}
-                onChange={(event) => {
-                  setCustomFromDate(event.target.value);
-                  setSessionId(null);
-                  setPage(1);
-                }}
-              />
-              <TextField
-                size="small"
-                type="date"
-                label="Đến ngày"
-                value={customToDate}
-                fullWidth
-                slotProps={{ inputLabel: { shrink: true } }}
-                onChange={(event) => {
-                  setCustomToDate(event.target.value);
-                  setSessionId(null);
-                  setPage(1);
-                }}
-              />
-            </>
-          )}
-          <TextField
-            select
-            size="small"
-            label="Kỳ sát hạch"
-            value={sessionId === null ? "" : String(sessionId)}
-            fullWidth
-            disabled={filtersLoading || rangeInvalid}
-            onChange={(event) => {
-              setSessionId(
-                event.target.value ? Number(event.target.value) : null
-              );
-              setPage(1);
-            }}
-          >
-            <MenuItem value="">Tất cả kỳ sát hạch</MenuItem>
-            {availableSessions.map((session) => (
-              <MenuItem key={session.id} value={String(session.id)}>
-                <Box sx={{ minWidth: 0 }}>
-                  <Typography variant="body2" sx={{ fontWeight: 700 }}>
-                    {session.code} · {formatDate(session.examDate)}
-                  </Typography>
-                  <Typography variant="caption" color="text.secondary">
-                    {session.centerName || session.centerCode} ·{" "}
-                    {formatNumber(session.totalCandidates)} thí sinh
-                  </Typography>
-                </Box>
-              </MenuItem>
-            ))}
-          </TextField>
-        </Box>
-        <Box
-          sx={{
-            mt: 2,
-            display: "grid",
-            gridTemplateColumns: { xs: "1fr", md: "repeat(2,minmax(0,1fr))" },
-            gap: 2,
-          }}
-        >
-          <TextField
-            size="small"
-            label="Khoảng thời gian áp dụng"
-            value={
-              rangeInvalid
-                ? "Không hợp lệ"
-                : `${formatDate(fromDate)} — ${formatDate(toDate)}`
-            }
-            disabled
-            fullWidth
-          />
-          <TextField
-            size="small"
-            label="Cơ sở sát hạch"
-            value={
-              selectedSession
-                ? selectedSession.centerName ||
-                  selectedSession.centerCode ||
-                  "Chưa xác định"
-                : "Tất cả cơ sở sát hạch"
-            }
-            disabled
-            fullWidth
-          />
-        </Box>
-        {rangeInvalid && (
-          <Alert severity="warning" sx={{ mt: 2 }}>
-            Ngày bắt đầu phải nhỏ hơn hoặc bằng ngày kết thúc.
-          </Alert>
-        )}
-
-        {filtersLoading && (
-          <Stack
-            direction="row"
-            sx={{ mt: 1.5, alignItems: "center", spacing: 1 }}
-          >
-            <CircularProgress size={14} />
-
-            <Typography variant="caption" color="text.secondary">
-              Đang tải danh sách kỳ sát hạch...
-            </Typography>
-          </Stack>
-        )}
-
-        {!filtersLoading && options && availableSessions.length === 0 && (
-          <Alert severity="info" sx={{ mt: 2 }}>
-            Không có kỳ sát hạch trong khoảng thời gian đã chọn.
-          </Alert>
-        )}
-      </Card>
-
-      {/* SUMMARY */}
-      <SummaryCards data={report?.summary ?? null} />
-
-      <Typography variant="caption" color="text.secondary">
-        Các chỉ tiêu Đã đậu, Chưa đậu và Chờ kết quả được tính theo học viên
-        trong phạm vi lọc. Người có lần vắng vẫn có thể thuộc nhóm Chưa đậu hoặc
-        Đã đậu.
-      </Typography>
-
-      {/* PART STATISTICS */}
-      <PartsTable items={report?.parts ?? []} />
-
-      {/* STUDENTS */}
-      <Card
-        variant="outlined"
-        sx={{
-          borderRadius: 3,
-          minWidth: 0,
           overflow: "hidden",
         }}
       >
-        <Box sx={{ p: 2 }}>
+        <Tabs
+          value={activeReportTab}
+          onChange={(_, next: number) => setActiveReportTab(next)}
+          variant="scrollable"
+          scrollButtons="auto"
+          aria-label="Các loại báo cáo sát hạch"
+        >
+          <Tab label="Thống kê học viên" />
+          <Tab label="Tổng hợp theo cơ sở đào tạo" />
+        </Tabs>
+      </Card>
+
+      {activeReportTab === 1 ? (
+        <CsdtReportsPanel />
+      ) : (
+        <Stack spacing={2.5} sx={{ minWidth: 0, maxWidth: "100%" }}>
+          {/* Header */}
           <Stack
             direction={{ xs: "column", sm: "row" }}
             sx={{
               justifyContent: "space-between",
               alignItems: {
-                xs: "stretch",
+                xs: "flex-start",
                 sm: "center",
               },
               spacing: 2,
             }}
           >
             <Box>
-              <Typography variant="subtitle1" sx={{ fontWeight: 800 }}>
-                Kết quả từng học viên
+              <Typography variant="h5" sx={{ fontWeight: 800 }}>
+                Thống kê sát hạch
               </Typography>
 
-              <Typography variant="caption" color="text.secondary">
-                {formatNumber(report?.pagination.total)} học viên phù hợp
+              <Typography color="text.secondary" sx={{ mt: 0.5 }}>
+                Theo năm, quý, tháng hoặc khoảng ngày; theo kỳ sát hạch và kết
+                quả từng phần thi.
               </Typography>
             </Box>
 
-            <Stack
-              component="form"
-              direction="row"
-              spacing={1}
-              onSubmit={(event) => {
-                event.preventDefault();
+            <Stack direction="row" sx={{ spacing: 1, flexWrap: "wrap" }}>
+              <ExportExcelButton
+                disabled={
+                  !accessToken || loading || filtersLoading || rangeInvalid
+                }
+                onExport={async () => {
+                  if (!accessToken) {
+                    throw new Error("Phiên đăng nhập không hợp lệ.");
+                  }
 
-                setSearch(searchInput.trim());
-                setPage(1);
-              }}
-            >
-              <TextField
-                size="small"
-                label="Tên, CCCD, mã đăng ký"
-                value={searchInput}
-                onChange={(event) => setSearchInput(event.target.value)}
-                sx={{
-                  minWidth: {
-                    sm: 250,
-                  },
-                  flex: 1,
+                  if (rangeInvalid) {
+                    throw new Error("Khoảng thời gian không hợp lệ.");
+                  }
+
+                  await exportExamStatisticsExcel(
+                    accessToken,
+                    {
+                      year,
+                      fromDate,
+                      toDate,
+                      sessionId,
+                      search,
+                    },
+                    {
+                      courseName:
+                        `Thời gian: ${formatDate(fromDate)}` +
+                        ` - ${formatDate(toDate)}`,
+
+                      sessionName: selectedSession
+                        ? `${selectedSession.code} - ` +
+                          formatDate(selectedSession.examDate)
+                        : "Tất cả kỳ sát hạch",
+                    }
+                  );
                 }}
               />
 
               <Button
-                type="submit"
                 variant="outlined"
-                startIcon={<SearchOutlined />}
-                sx={{
-                  textTransform: "none",
-                  whiteSpace: "nowrap",
-                }}
+                startIcon={<RefreshOutlined />}
+                disabled={loading || filtersLoading}
+                onClick={() => setReload((value) => value + 1)}
+                sx={{ textTransform: "none" }}
               >
-                Tìm
+                Tải lại
               </Button>
             </Stack>
           </Stack>
-        </Box>
 
-        {loading && (
-          <Box sx={{ px: 2, pb: 1 }}>
-            <CircularProgress size={20} />
-          </Box>
-        )}
+          {error && <Alert severity="error">{error}</Alert>}
 
-        <StudentResultsTable
-          items={report?.students ?? []}
-          onView={(student) => {
-            void openStudent(student);
-          }}
-        />
+          {/* Bộ lọc */}
+          <Card variant="outlined" sx={{ borderRadius: 3, p: 2 }}>
+            <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 2 }}>
+              Bộ lọc thống kê
+            </Typography>
 
-        {(report?.pagination.totalPages ?? 0) > 1 && (
-          <Box
-            sx={{
-              p: 2,
-              display: "flex",
-              justifyContent: "center",
-            }}
-          >
-            <Pagination
-              color="primary"
-              page={page}
-              count={report?.pagination.totalPages ?? 1}
-              onChange={(_, next) => setPage(next)}
-            />
-          </Box>
-        )}
-      </Card>
-
-      {/* STUDENT HISTORY DIALOG */}
-      <Dialog
-        open={selectedStudent !== null}
-        onClose={() => setSelectedStudent(null)}
-        maxWidth="md"
-        fullWidth
-        slotProps={{
-          paper: {
-            sx: {
-              borderRadius: 3,
-              maxHeight: "90vh",
-            },
-          },
-        }}
-      >
-        <DialogTitle component="div">
-          <Stack
-            direction="row"
-            sx={{ justifyContent: "space-between", alignItems: "center" }}
-          >
-            <Box sx={{ minWidth: 0 }}>
-              <Typography variant="h6" sx={{ fontWeight: 800 }}>
-                Lịch sử sát hạch
-              </Typography>
-
-              <Typography variant="body2" color="text.secondary">
-                {selectedStudent?.fullName}
-              </Typography>
-
-              {selectedStudent && (
-                <Typography variant="caption" color="text.secondary">
-                  Tổng toàn lịch sử: {selectedStudent.allTimeSessionCount} kỳ
-                  sát hạch
-                </Typography>
-              )}
-            </Box>
-
-            <IconButton onClick={() => setSelectedStudent(null)}>
-              <CloseOutlined />
-            </IconButton>
-          </Stack>
-        </DialogTitle>
-
-        <DialogContent dividers>
-          {historyLoading ? (
             <Box
               sx={{
                 display: "grid",
-                placeItems: "center",
-                py: 5,
+                gridTemplateColumns: {
+                  xs: "1fr",
+                  sm: "repeat(2, minmax(0, 1fr))",
+                  lg: "repeat(4, minmax(0, 1fr))",
+                },
+                gap: 2,
               }}
             >
-              <CircularProgress />
-            </Box>
-          ) : historyError ? (
-            <Alert severity="error">{historyError}</Alert>
-          ) : (
-            <Stack spacing={1.5}>
-              <Alert severity="info">
-                Hiển thị toàn bộ lịch sử của học viên. Các kỳ ngoài phạm vi thời
-                gian hoặc kỳ sát hạch đang chọn được đánh dấu riêng.
-              </Alert>
+              <TextField
+                select
+                size="small"
+                label="Kiểu báo cáo"
+                value={period}
+                onChange={(event) => {
+                  setPeriod(event.target.value as ReportPeriod);
+                  setSessionId(null);
+                  setPage(1);
+                }}
+                fullWidth
+              >
+                <MenuItem value="year">Theo năm</MenuItem>
 
-              {history.map((item, index) => (
-                <HistoryItem
-                  key={item.id}
-                  item={item}
-                  order={index + 1}
-                  fromDate={fromDate}
-                  toDate={toDate}
-                />
-              ))}
+                <MenuItem value="quarter">Theo quý</MenuItem>
 
-              {!history.length && (
-                <Typography color="text.secondary">
-                  Chưa có lịch sử sát hạch.
-                </Typography>
+                <MenuItem value="month">Theo tháng</MenuItem>
+
+                <MenuItem value="range">Từ ngày đến ngày</MenuItem>
+              </TextField>
+
+              {period !== "range" && (
+                <TextField
+                  select
+                  size="small"
+                  label="Năm sát hạch"
+                  value={year}
+                  fullWidth
+                  onChange={(event) => {
+                    setYear(Number(event.target.value));
+                    setSessionId(null);
+                    setPage(1);
+                  }}
+                >
+                  {[
+                    ...new Set([
+                      year,
+                      ...(options?.years ?? []).map((item) => item.year),
+                    ]),
+                  ]
+                    .sort((a, b) => b - a)
+                    .map((value) => (
+                      <MenuItem key={value} value={value}>
+                        {value}
+                      </MenuItem>
+                    ))}
+                </TextField>
               )}
-            </Stack>
-          )}
-        </DialogContent>
-      </Dialog>
+
+              {period === "quarter" && (
+                <TextField
+                  select
+                  size="small"
+                  label="Quý"
+                  value={quarter}
+                  fullWidth
+                  onChange={(event) => {
+                    setQuarter(Number(event.target.value));
+                    setSessionId(null);
+                    setPage(1);
+                  }}
+                >
+                  {[1, 2, 3, 4].map((value) => (
+                    <MenuItem key={value} value={value}>
+                      Quý {value}
+                    </MenuItem>
+                  ))}
+                </TextField>
+              )}
+
+              {period === "month" && (
+                <TextField
+                  select
+                  size="small"
+                  label="Tháng"
+                  value={month}
+                  fullWidth
+                  onChange={(event) => {
+                    setMonth(Number(event.target.value));
+                    setSessionId(null);
+                    setPage(1);
+                  }}
+                >
+                  {Array.from({ length: 12 }, (_, index) => index + 1).map(
+                    (value) => (
+                      <MenuItem key={value} value={value}>
+                        Tháng {value}
+                      </MenuItem>
+                    )
+                  )}
+                </TextField>
+              )}
+
+              {period === "range" && (
+                <>
+                  <TextField
+                    size="small"
+                    type="date"
+                    label="Từ ngày"
+                    value={customFromDate}
+                    fullWidth
+                    slotProps={{
+                      inputLabel: { shrink: true },
+                    }}
+                    onChange={(event) => {
+                      setCustomFromDate(event.target.value);
+                      setSessionId(null);
+                      setPage(1);
+                    }}
+                  />
+
+                  <TextField
+                    size="small"
+                    type="date"
+                    label="Đến ngày"
+                    value={customToDate}
+                    fullWidth
+                    slotProps={{
+                      inputLabel: { shrink: true },
+                    }}
+                    onChange={(event) => {
+                      setCustomToDate(event.target.value);
+                      setSessionId(null);
+                      setPage(1);
+                    }}
+                  />
+                </>
+              )}
+
+              <TextField
+                select
+                size="small"
+                label="Kỳ sát hạch"
+                value={sessionId === null ? "" : String(sessionId)}
+                fullWidth
+                disabled={filtersLoading || rangeInvalid}
+                onChange={(event) => {
+                  setSessionId(
+                    event.target.value ? Number(event.target.value) : null
+                  );
+                  setPage(1);
+                }}
+              >
+                <MenuItem value="">Tất cả kỳ sát hạch</MenuItem>
+
+                {availableSessions.map((session) => (
+                  <MenuItem key={session.id} value={String(session.id)}>
+                    <Box sx={{ minWidth: 0 }}>
+                      <Typography variant="body2" sx={{ fontWeight: 700 }}>
+                        {session.code} · {formatDate(session.examDate)}
+                      </Typography>
+
+                      <Typography variant="caption" color="text.secondary">
+                        {session.centerName || session.centerCode}
+                        {" · "}
+                        {formatNumber(session.totalCandidates)} thí sinh
+                      </Typography>
+                    </Box>
+                  </MenuItem>
+                ))}
+              </TextField>
+            </Box>
+
+            <Box
+              sx={{
+                mt: 2,
+                display: "grid",
+                gridTemplateColumns: {
+                  xs: "1fr",
+                  md: "repeat(2, minmax(0, 1fr))",
+                },
+                gap: 2,
+              }}
+            >
+              <TextField
+                size="small"
+                label="Khoảng thời gian áp dụng"
+                value={
+                  rangeInvalid
+                    ? "Không hợp lệ"
+                    : `${formatDate(fromDate)} — ` + formatDate(toDate)
+                }
+                disabled
+                fullWidth
+              />
+
+              <TextField
+                size="small"
+                label="Cơ sở sát hạch"
+                value={
+                  selectedSession
+                    ? selectedSession.centerName ||
+                      selectedSession.centerCode ||
+                      "Chưa xác định"
+                    : "Tất cả cơ sở sát hạch"
+                }
+                disabled
+                fullWidth
+              />
+            </Box>
+
+            {rangeInvalid && (
+              <Alert severity="warning" sx={{ mt: 2 }}>
+                Ngày bắt đầu phải nhỏ hơn hoặc bằng ngày kết thúc.
+              </Alert>
+            )}
+
+            {filtersLoading && (
+              <Stack
+                direction="row"
+                sx={{ mt: 1.5, alignItems: "center", spacing: 1 }}
+              >
+                <CircularProgress size={14} />
+
+                <Typography variant="caption" color="text.secondary">
+                  Đang tải danh sách kỳ sát hạch...
+                </Typography>
+              </Stack>
+            )}
+
+            {!filtersLoading && options && availableSessions.length === 0 && (
+              <Alert severity="info" sx={{ mt: 2 }}>
+                Không có kỳ sát hạch trong khoảng thời gian đã chọn.
+              </Alert>
+            )}
+          </Card>
+
+          {/* Thống kê tổng */}
+          <SummaryCards data={report?.summary ?? null} />
+
+          <Typography variant="caption" color="text.secondary">
+            Đã đậu, Chưa đậu và Chờ kết quả được tính theo học viên trong phạm
+            vi lọc. Người có lần vắng vẫn có thể thuộc nhóm Chưa đậu hoặc Đã
+            đậu.
+          </Typography>
+
+          {/* Kết quả từng phần */}
+          <PartsTable items={report?.parts ?? []} />
+
+          {/* Danh sách học viên */}
+          <Card
+            variant="outlined"
+            sx={{
+              borderRadius: 3,
+              minWidth: 0,
+              overflow: "hidden",
+            }}
+          >
+            <Box sx={{ p: 2 }}>
+              <Stack
+                direction={{ xs: "column", sm: "row" }}
+                sx={{
+                  justifyContent: "space-between",
+                  alignItems: {
+                    xs: "stretch",
+                    sm: "center",
+                  },
+                  spacing: 2,
+                }}
+              >
+                <Box>
+                  <Typography variant="subtitle1" sx={{ fontWeight: 800 }}>
+                    Kết quả từng học viên
+                  </Typography>
+
+                  <Typography variant="caption" color="text.secondary">
+                    {formatNumber(report?.pagination.total)} học viên phù hợp
+                  </Typography>
+                </Box>
+
+                <Stack
+                  component="form"
+                  direction="row"
+                  spacing={1}
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    setSearch(searchInput.trim());
+                    setPage(1);
+                  }}
+                >
+                  <TextField
+                    size="small"
+                    label="Tên, CCCD, mã đăng ký"
+                    value={searchInput}
+                    onChange={(event) => setSearchInput(event.target.value)}
+                    sx={{
+                      minWidth: { sm: 250 },
+                      flex: 1,
+                    }}
+                  />
+
+                  <Button
+                    type="submit"
+                    variant="outlined"
+                    startIcon={<SearchOutlined />}
+                    sx={{
+                      textTransform: "none",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    Tìm
+                  </Button>
+                </Stack>
+              </Stack>
+            </Box>
+
+            {loading && (
+              <Box sx={{ px: 2, pb: 1 }}>
+                <CircularProgress size={20} />
+              </Box>
+            )}
+
+            <StudentResultsTable
+              items={report?.students ?? []}
+              onView={(student) => void openStudent(student)}
+            />
+
+            {(report?.pagination.totalPages ?? 0) > 1 && (
+              <Box
+                sx={{
+                  p: 2,
+                  display: "flex",
+                  justifyContent: "center",
+                }}
+              >
+                <Pagination
+                  color="primary"
+                  page={page}
+                  count={report?.pagination.totalPages ?? 1}
+                  onChange={(_, next) => setPage(next)}
+                />
+              </Box>
+            )}
+          </Card>
+
+          {/* Lịch sử học viên */}
+          <Dialog
+            open={selectedStudent !== null}
+            onClose={() => setSelectedStudent(null)}
+            maxWidth="md"
+            fullWidth
+            slotProps={{
+              paper: {
+                sx: {
+                  borderRadius: 3,
+                  maxHeight: "90vh",
+                },
+              },
+            }}
+          >
+            <DialogTitle component="div">
+              <Stack
+                direction="row"
+                sx={{ justifyContent: "space-between", alignItems: "center" }}
+              >
+                <Box sx={{ minWidth: 0 }}>
+                  <Typography variant="h6" sx={{ fontWeight: 800 }}>
+                    Lịch sử sát hạch
+                  </Typography>
+
+                  <Typography variant="body2" color="text.secondary">
+                    {selectedStudent?.fullName}
+                  </Typography>
+
+                  {selectedStudent && (
+                    <Typography variant="caption" color="text.secondary">
+                      Tổng toàn lịch sử: {selectedStudent.allTimeSessionCount}{" "}
+                      kỳ sát hạch
+                    </Typography>
+                  )}
+                </Box>
+
+                <IconButton onClick={() => setSelectedStudent(null)}>
+                  <CloseOutlined />
+                </IconButton>
+              </Stack>
+            </DialogTitle>
+
+            <DialogContent dividers>
+              {historyLoading ? (
+                <Box
+                  sx={{
+                    display: "grid",
+                    placeItems: "center",
+                    py: 5,
+                  }}
+                >
+                  <CircularProgress />
+                </Box>
+              ) : historyError ? (
+                <Alert severity="error">{historyError}</Alert>
+              ) : (
+                <Stack spacing={1.5}>
+                  <Alert severity="info">
+                    Hiển thị toàn bộ lịch sử học viên. Các kỳ ngoài phạm vi thời
+                    gian hoặc kỳ đang chọn được đánh dấu riêng.
+                  </Alert>
+
+                  {history.map((item, index) => (
+                    <HistoryItem
+                      key={item.id}
+                      item={item}
+                      order={index + 1}
+                      fromDate={fromDate}
+                      toDate={toDate}
+                    />
+                  ))}
+
+                  {!history.length && (
+                    <Typography color="text.secondary">
+                      Chưa có lịch sử sát hạch.
+                    </Typography>
+                  )}
+                </Stack>
+              )}
+            </DialogContent>
+          </Dialog>
+        </Stack>
+      )}
     </Stack>
   );
 }
