@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+
 import { useSearchParams } from "next/navigation";
 
 import {
@@ -60,6 +61,11 @@ type Bc2Status = "all" | "has_bc2" | "no_bc2";
 
 type ExamFilter = "all" | StudentExamStatus | "absent" | "retake";
 
+type EditStudent = Partial<StudentFormData> & {
+  id: number;
+  hasPhoto?: boolean;
+};
+
 function formatDate(value?: string | null) {
   if (!value) return "—";
 
@@ -67,6 +73,18 @@ function formatDate(value?: string | null) {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
 
   return match ? `${match[3]}/${match[2]}/${match[1]}` : text;
+}
+
+function formatDateTime(value?: string | null) {
+  if (!value) return "—";
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return date.toLocaleString("vi-VN");
 }
 
 function Info({ label, value }: { label: string; value?: React.ReactNode }) {
@@ -172,12 +190,14 @@ function normalizeStudent<T extends StudentRow>(student: T): T {
 
 function SummaryCards({
   summary,
+  isSystemAdmin,
 }: {
   summary: StudentsPageResult["summary"] | null;
+  isSystemAdmin: boolean;
 }) {
   const stats = [
     {
-      label: "Tổng học viên",
+      label: isSystemAdmin ? "Thí sinh đã tiếp nhận" : "Tổng học viên",
       value: summary?.total ?? 0,
       color: "text.primary",
     },
@@ -230,7 +250,10 @@ function SummaryCards({
         <Card
           key={stat.label}
           variant="outlined"
-          sx={{ borderRadius: 2.5, minWidth: 0 }}
+          sx={{
+            borderRadius: 2.5,
+            minWidth: 0,
+          }}
         >
           <Box sx={{ p: { xs: 1.5, md: 2 } }}>
             <Typography
@@ -264,11 +287,15 @@ function SummaryCards({
 function StudentTable({
   students,
   loading,
+  isSystemAdmin,
+  showIntakeUser,
   onEdit,
   onDetail,
 }: {
   students: StudentRow[];
   loading: boolean;
+  isSystemAdmin: boolean;
+  showIntakeUser: boolean;
   onEdit: (id: number) => void;
   onDetail: (id: number) => void;
 }) {
@@ -283,9 +310,8 @@ function StudentTable({
       <Table
         size="medium"
         sx={{
-          minWidth: 950,
+          minWidth: 1000,
           tableLayout: "fixed",
-
           "& .MuiTableCell-head": {
             bgcolor: "grey.50",
             color: "text.secondary",
@@ -296,7 +322,6 @@ function StudentTable({
             borderColor: "divider",
             py: 1.75,
           },
-
           "& .MuiTableCell-body": {
             py: 1.75,
             px: 1.5,
@@ -308,13 +333,13 @@ function StudentTable({
       >
         <TableHead>
           <TableRow>
-            <TableCell sx={{ width: 250 }}>Học viên</TableCell>
+            <TableCell sx={{ width: 270 }}>Học viên</TableCell>
 
             <TableCell sx={{ width: 160 }}>Thông tin cá nhân</TableCell>
 
-            <TableCell sx={{ width: 170 }}>Đào tạo</TableCell>
+            <TableCell sx={{ width: 180 }}>Đào tạo</TableCell>
 
-            <TableCell sx={{ width: 150 }}>Lịch sử sát hạch</TableCell>
+            <TableCell sx={{ width: 155 }}>Lịch sử sát hạch</TableCell>
 
             <TableCell sx={{ width: 125 }}>Kết quả</TableCell>
 
@@ -331,21 +356,15 @@ function StudentTable({
 
             const hasBc2 = student.hasBc2 === true || bc2Reports.length > 0;
 
+            const canEdit =
+              !hasBc2 && (!isSystemAdmin || student.sourceType === "manual");
+
             return (
-              <TableRow
-                key={student.id}
-                hover
-                sx={{
-                  "&:hover": {
-                    bgcolor: "action.hover",
-                  },
-                }}
-              >
-                {/* HỌC VIÊN */}
+              <TableRow key={student.id} hover>
                 <TableCell>
                   <Stack
                     direction="row"
-                    sx={{ minWidth: 0, spacing: 1.5, alignItems: "center" }}
+                    sx={{ spacing: 1.5, alignItems: "flex-start" }}
                   >
                     <Box sx={{ flexShrink: 0 }}>
                       <StudentAvatar
@@ -355,13 +374,12 @@ function StudentTable({
                       />
                     </Box>
 
-                    <Box sx={{ minWidth: 0, flex: 1 }}>
+                    <Box sx={{ minWidth: 0 }}>
                       <Typography
                         variant="body2"
                         sx={{
                           fontWeight: 700,
-                          lineHeight: 1.4,
-                          overflowWrap: "break-word",
+                          overflowWrap: "anywhere",
                         }}
                       >
                         {student.fullName}
@@ -373,37 +391,59 @@ function StudentTable({
                         sx={{
                           display: "block",
                           mt: 0.5,
-                          fontSize: 11,
                           overflowWrap: "anywhere",
                         }}
                       >
                         {student.registrationCode}
                       </Typography>
+
+                      {student.sourceType === "manual" && (
+                        <Chip
+                          size="small"
+                          variant="outlined"
+                          color="info"
+                          label="Nhập thủ công"
+                          sx={{
+                            mt: 0.75,
+                            height: 23,
+                            fontSize: 11,
+                          }}
+                        />
+                      )}
+
+                      {showIntakeUser && student.intakeUser && (
+                        <Typography
+                          variant="caption"
+                          color="text.secondary"
+                          sx={{
+                            display: "block",
+                            mt: 0.75,
+                            overflowWrap: "anywhere",
+                          }}
+                        >
+                          Tiếp nhận: {student.intakeUser.fullName}
+                        </Typography>
+                      )}
                     </Box>
                   </Stack>
                 </TableCell>
 
-                {/* THÔNG TIN CÁ NHÂN */}
                 <TableCell>
                   <Stack spacing={0.5}>
-                    <Typography
-                      variant="body2"
-                      sx={{ whiteSpace: "nowrap", fontWeight: 600 }}
-                    >
+                    <Typography variant="body2" sx={{ fontWeight: 600 }}>
                       {formatDate(student.dateOfBirth)}
                     </Typography>
 
                     <Typography
                       variant="caption"
                       color="text.secondary"
-                      sx={{ whiteSpace: "nowrap" }}
+                      sx={{ overflowWrap: "anywhere" }}
                     >
                       CCCD: {student.identityNumber ?? "—"}
                     </Typography>
                   </Stack>
                 </TableCell>
 
-                {/* ĐÀO TẠO */}
                 <TableCell>
                   <Stack sx={{ spacing: 0.75, alignItems: "flex-start" }}>
                     {courses.length ? (
@@ -418,8 +458,8 @@ function StudentTable({
                             variant="outlined"
                             label={course.code}
                             sx={{
-                              height: "auto",
                               maxWidth: 150,
+                              height: "auto",
                               "& .MuiChip-label": {
                                 py: 0.5,
                                 whiteSpace: "normal",
@@ -447,7 +487,10 @@ function StudentTable({
                       color={hasBc2 ? "success" : "default"}
                       variant={hasBc2 ? "outlined" : "filled"}
                       label={hasBc2 ? "Đã có BC2" : "Chưa có BC2"}
-                      sx={{ height: 23, fontSize: 11 }}
+                      sx={{
+                        height: 23,
+                        fontSize: 11,
+                      }}
                     />
 
                     {hasBc2 && bc2Reports.length > 0 && (
@@ -455,7 +498,6 @@ function StudentTable({
                         variant="caption"
                         color="text.secondary"
                         sx={{
-                          maxWidth: "100%",
                           overflowWrap: "anywhere",
                         }}
                       >
@@ -467,22 +509,14 @@ function StudentTable({
                   </Stack>
                 </TableCell>
 
-                {/* LỊCH SỬ SÁT HẠCH */}
                 <TableCell>
                   <Stack spacing={0.4}>
-                    <Typography
-                      variant="body2"
-                      sx={{ fontWeight: 700, whiteSpace: "nowrap" }}
-                    >
+                    <Typography variant="body2" sx={{ fontWeight: 700 }}>
                       {student.examSessionCount} kỳ
-                      <Typography
-                        component="span"
-                        variant="caption"
-                        color="text.secondary"
-                        sx={{ ml: 0.75, fontWeight: 400 }}
-                      >
-                        ({student.examResultCount} có KQ)
-                      </Typography>
+                    </Typography>
+
+                    <Typography variant="caption" color="text.secondary">
+                      {student.examResultCount} kỳ có KQ
                     </Typography>
 
                     {student.latestExam ? (
@@ -491,11 +525,7 @@ function StudentTable({
                           {student.latestExam.sessionCode}
                         </Typography>
 
-                        <Typography
-                          variant="caption"
-                          color="text.secondary"
-                          sx={{ whiteSpace: "nowrap" }}
-                        >
+                        <Typography variant="caption" color="text.secondary">
                           {formatDate(student.latestExam.examDate)}
                         </Typography>
                       </>
@@ -507,7 +537,6 @@ function StudentTable({
                   </Stack>
                 </TableCell>
 
-                {/* KẾT QUẢ */}
                 <TableCell>
                   <Stack sx={{ spacing: 0.75, alignItems: "flex-start" }}>
                     <ExamStatusChip status={student.examStatus} />
@@ -518,18 +547,17 @@ function StudentTable({
                         color="warning"
                         variant="outlined"
                         label="Từng vắng"
-                        sx={{ height: 23, fontSize: 11 }}
+                        sx={{
+                          height: 23,
+                          fontSize: 11,
+                        }}
                       />
                     )}
                   </Stack>
                 </TableCell>
 
-                {/* THAO TÁC */}
                 <TableCell align="right">
-                  <Stack
-                    direction="column"
-                    sx={{ spacing: 0.5, alignItems: "flex-end" }}
-                  >
+                  <Stack sx={{ spacing: 0.5, alignItems: "flex-end" }}>
                     <Button
                       size="small"
                       startIcon={<VisibilityOutlined fontSize="small" />}
@@ -542,7 +570,7 @@ function StudentTable({
                       Chi tiết
                     </Button>
 
-                    {!hasBc2 && (
+                    {canEdit && (
                       <Button
                         size="small"
                         color="inherit"
@@ -590,9 +618,12 @@ function ExamHistoryCard({
         <Stack
           direction={{ xs: "column", sm: "row" }}
           sx={{
-            justifyContent: "space-between",
-            alignItems: { xs: "flex-start", sm: "center" },
             spacing: 1,
+            justifyContent: "space-between",
+            alignItems: {
+              xs: "flex-start",
+              sm: "center",
+            },
           }}
         >
           <Box>
@@ -609,7 +640,7 @@ function ExamHistoryCard({
             </Typography>
           </Box>
 
-          <Stack direction="row" spacing={0.5}>
+          <Stack direction="row" sx={{ spacing: 0.5, flexWrap: "wrap" }}>
             {exam.hasAbsentPart && (
               <Chip
                 size="small"
@@ -630,7 +661,10 @@ function ExamHistoryCard({
         <Typography
           variant="caption"
           color="text.secondary"
-          sx={{ display: "block", mt: 1 }}
+          sx={{
+            display: "block",
+            mt: 1,
+          }}
         >
           Trung tâm: {exam.centerName || exam.centerCode || "—"}
           {" · "}
@@ -681,7 +715,13 @@ function ExamHistoryCard({
   );
 }
 
-function StudentDetailContent({ detail }: { detail: StudentDetail }) {
+function StudentDetailContent({
+  detail,
+  showAllIntakes,
+}: {
+  detail: StudentDetail;
+  showAllIntakes: boolean;
+}) {
   const history = Array.isArray(detail.examHistory) ? detail.examHistory : [];
 
   const partStats = Array.isArray(detail.partStats) ? detail.partStats : [];
@@ -690,9 +730,18 @@ function StudentDetailContent({ detail }: { detail: StudentDetail }) {
 
   const reports = Array.isArray(detail.bc2Reports) ? detail.bc2Reports : [];
 
+  const intakes = Array.isArray(detail.intakes) ? detail.intakes : [];
+
+  const documentLabels: Record<string, string> = {
+    health_certificate: "Giấy chứng nhận sức khỏe",
+    driving_experience: "Giấy xác nhận quá trình lái xe",
+    diploma: "Bản sao văn bằng",
+    current_license_copy: "Bản sao GPLX hiện có",
+  };
+
   return (
     <Stack spacing={3}>
-      <Stack direction="row" sx={{ alignItems: "center", spacing: 2 }}>
+      <Stack direction="row" sx={{ spacing: 2, alignItems: "center" }}>
         <StudentAvatar
           studentId={detail.id}
           fullName={detail.fullName}
@@ -707,19 +756,37 @@ function StudentDetailContent({ detail }: { detail: StudentDetail }) {
           <Typography
             variant="caption"
             color="text.secondary"
-            sx={{ display: "block", mb: 1 }}
+            sx={{
+              display: "block",
+              mb: 1,
+            }}
           >
             {detail.registrationCode}
           </Typography>
 
-          <ExamStatusChip status={detail.examStatus} />
+          <Stack
+            direction="row"
+            sx={{ spacing: 1, flexWrap: "wrap", alignItems: "center" }}
+          >
+            <ExamStatusChip status={detail.examStatus} />
+
+            {detail.sourceType === "manual" && (
+              <Chip size="small" variant="outlined" label="Nhập thủ công" />
+            )}
+          </Stack>
         </Box>
       </Stack>
 
       <Divider />
 
       <Box>
-        <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 2 }}>
+        <Typography
+          variant="subtitle1"
+          sx={{
+            fontWeight: 700,
+            mb: 2,
+          }}
+        >
           Thông tin cá nhân
         </Typography>
 
@@ -737,7 +804,16 @@ function StudentDetailContent({ detail }: { detail: StudentDetail }) {
           <Info label="Mã đăng ký" value={detail.registrationCode} />
           <Info label="Ngày sinh" value={formatDate(detail.dateOfBirth)} />
           <Info label="CCCD/CMND" value={detail.identityNumber} />
-          <Info label="Giới tính" value={detail.gender} />
+          <Info
+            label="Giới tính"
+            value={
+              detail.gender === "M" || detail.gender === "1"
+                ? "Nam"
+                : detail.gender === "F" || detail.gender === "2"
+                ? "Nữ"
+                : detail.gender
+            }
+          />
           <Info label="Quốc tịch" value={detail.nationalityName} />
           <Info label="Thường trú" value={detail.permanentAddress} />
           <Info label="Nơi cư trú" value={detail.currentAddress} />
@@ -747,7 +823,220 @@ function StudentDetailContent({ detail }: { detail: StudentDetail }) {
       <Divider />
 
       <Box>
-        <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 2 }}>
+        <Typography
+          variant="subtitle1"
+          sx={{
+            fontWeight: 700,
+            mb: 2,
+          }}
+        >
+          Hồ sơ tiếp nhận thí sinh tự do ({intakes.length})
+        </Typography>
+
+        {intakes.length === 0 ? (
+          <Alert severity="info">
+            Học viên chưa có hồ sơ tiếp nhận thí sinh tự do.
+          </Alert>
+        ) : (
+          <Stack spacing={2}>
+            {intakes.map((intake, index) => (
+              <Card
+                key={intake.id}
+                variant="outlined"
+                sx={{
+                  borderRadius: 2,
+                  p: 2,
+                }}
+              >
+                <Stack spacing={2}>
+                  <Stack
+                    direction={{
+                      xs: "column",
+                      sm: "row",
+                    }}
+                    sx={{
+                      justifyContent: "space-between",
+                      alignItems: {
+                        xs: "flex-start",
+                        sm: "center",
+                      },
+                      spacing: 1,
+                    }}
+                  >
+                    <Typography variant="body2" sx={{ fontWeight: 800 }}>
+                      Hồ sơ tiếp nhận {index + 1}
+                    </Typography>
+
+                    <Chip
+                      size="small"
+                      color="info"
+                      variant="outlined"
+                      label={
+                        intake.applicationType === "new"
+                          ? "Cấp mới"
+                          : intake.applicationType === "upgrade"
+                          ? "Nâng hạng"
+                          : "Cấp lại"
+                      }
+                    />
+                  </Stack>
+
+                  <Box
+                    sx={{
+                      display: "grid",
+                      gridTemplateColumns: {
+                        xs: "1fr",
+                        sm: "repeat(2, minmax(0, 1fr))",
+                      },
+                      gap: 2,
+                    }}
+                  >
+                    <Info
+                      label="Hạng đề nghị sát hạch"
+                      value={intake.requestedLicenseClass}
+                    />
+
+                    <Info
+                      label="Hạng đào tạo"
+                      value={intake.trainingLicenseClass}
+                    />
+
+                    <Info
+                      label="Nội dung sát hạch"
+                      value={intake.examinationContent}
+                    />
+
+                    <Info
+                      label="Cơ quan cấp"
+                      value={intake.certificateIssuer}
+                    />
+
+                    <Info
+                      label="Ngày cấp CCCD"
+                      value={formatDate(intake.identityIssuedDate)}
+                    />
+
+                    <Info
+                      label="Ngày tiếp nhận"
+                      value={formatDateTime(intake.createdAt)}
+                    />
+
+                    <Info
+                      label="Nhân viên tiếp nhận"
+                      value={
+                        showAllIntakes
+                          ? `${intake.createdByName} (@${intake.createdByUsername})`
+                          : intake.createdByName
+                      }
+                    />
+
+                    <Info
+                      label="Cập nhật lần cuối"
+                      value={formatDateTime(intake.updatedAt)}
+                    />
+                  </Box>
+
+                  {Array.isArray(intake.documents) &&
+                    intake.documents.length > 0 && (
+                      <Box>
+                        <Typography
+                          variant="body2"
+                          sx={{
+                            fontWeight: 700,
+                            mb: 1,
+                          }}
+                        >
+                          Giấy tờ kèm theo
+                        </Typography>
+
+                        <Stack
+                          direction="row"
+                          sx={{ flexWrap: "wrap", gap: 1 }}
+                        >
+                          {intake.documents.map((doc) => (
+                            <Chip
+                              key={doc.type}
+                              size="small"
+                              color={doc.checked ? "success" : "default"}
+                              variant="outlined"
+                              label={`${
+                                documentLabels[doc.type] ?? doc.type
+                              }: ${doc.checked ? "Đã có" : "Chưa có"}`}
+                            />
+                          ))}
+                        </Stack>
+                      </Box>
+                    )}
+
+                  {Array.isArray(intake.existingLicenses) &&
+                    intake.existingLicenses.length > 0 && (
+                      <Box>
+                        <Typography
+                          variant="body2"
+                          sx={{
+                            fontWeight: 700,
+                            mb: 1,
+                          }}
+                        >
+                          Giấy phép lái xe hiện có
+                        </Typography>
+
+                        <Stack spacing={1}>
+                          {intake.existingLicenses.map(
+                            (license, licenseIndex) => (
+                              <Box
+                                key={licenseIndex}
+                                sx={{
+                                  display: "grid",
+                                  gridTemplateColumns: {
+                                    xs: "1fr",
+                                    sm: "repeat(2, minmax(0, 1fr))",
+                                  },
+                                  gap: 1.5,
+                                  border: "1px solid",
+                                  borderColor: "divider",
+                                  borderRadius: 2,
+                                  p: 1.5,
+                                }}
+                              >
+                                <Info label="Số GPLX" value={license.number} />
+                                <Info
+                                  label="Hạng GPLX"
+                                  value={license.licenseClass}
+                                />
+                                <Info
+                                  label="Ngày cấp"
+                                  value={formatDate(license.issuedDate)}
+                                />
+                                <Info
+                                  label="Nơi cấp"
+                                  value={license.issuedBy}
+                                />
+                              </Box>
+                            )
+                          )}
+                        </Stack>
+                      </Box>
+                    )}
+
+                  {intake.note && <Info label="Ghi chú" value={intake.note} />}
+                </Stack>
+              </Card>
+            ))}
+          </Stack>
+        )}
+      </Box>
+
+      <Divider />
+
+      <Box>
+        <Typography
+          variant="subtitle1"
+          sx={{
+            fontWeight: 700,
+            mb: 2,
+          }}
+        >
           Tổng hợp sát hạch
         </Typography>
 
@@ -762,15 +1051,10 @@ function StudentDetailContent({ detail }: { detail: StudentDetail }) {
           }}
         >
           <Info label="Số kỳ được xếp thi" value={detail.examSessionCount} />
-
           <Info label="Số kỳ có kết quả" value={detail.examResultCount} />
-
           <Info label="Số kỳ đạt" value={detail.passedSessionCount} />
-
           <Info label="Từng vắng" value={detail.everAbsent ? "Có" : "Không"} />
-
           <Info label="Kỳ gần nhất" value={detail.latestExam?.sessionCode} />
-
           <Info
             label="Ngày kỳ gần nhất"
             value={formatDate(detail.latestExam?.examDate)}
@@ -779,7 +1063,13 @@ function StudentDetailContent({ detail }: { detail: StudentDetail }) {
 
         {partStats.length > 0 && (
           <Box sx={{ mt: 2.5 }}>
-            <Typography variant="body2" sx={{ fontWeight: 700, mb: 1 }}>
+            <Typography
+              variant="body2"
+              sx={{
+                fontWeight: 700,
+                mb: 1,
+              }}
+            >
               Thống kê theo phần thi
             </Typography>
 
@@ -815,7 +1105,13 @@ function StudentDetailContent({ detail }: { detail: StudentDetail }) {
       <Divider />
 
       <Box>
-        <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 2 }}>
+        <Typography
+          variant="subtitle1"
+          sx={{
+            fontWeight: 700,
+            mb: 2,
+          }}
+        >
           Lịch sử sát hạch ({history.length})
         </Typography>
 
@@ -840,7 +1136,13 @@ function StudentDetailContent({ detail }: { detail: StudentDetail }) {
       <Divider />
 
       <Box>
-        <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 2 }}>
+        <Typography
+          variant="subtitle1"
+          sx={{
+            fontWeight: 700,
+            mb: 2,
+          }}
+        >
           Khóa đào tạo BC1 ({courses.length})
         </Typography>
 
@@ -852,7 +1154,10 @@ function StudentDetailContent({ detail }: { detail: StudentDetail }) {
               <Card
                 key={course.id}
                 variant="outlined"
-                sx={{ p: 2, borderRadius: 2 }}
+                sx={{
+                  p: 2,
+                  borderRadius: 2,
+                }}
               >
                 <Box
                   sx={{
@@ -880,7 +1185,13 @@ function StudentDetailContent({ detail }: { detail: StudentDetail }) {
       <Divider />
 
       <Box>
-        <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 2 }}>
+        <Typography
+          variant="subtitle1"
+          sx={{
+            fontWeight: 700,
+            mb: 2,
+          }}
+        >
           Báo cáo BC2 ({reports.length})
         </Typography>
 
@@ -888,11 +1199,14 @@ function StudentDetailContent({ detail }: { detail: StudentDetail }) {
           <Alert severity="info">Chưa tìm thấy báo cáo BC2 tương ứng.</Alert>
         ) : (
           <Stack spacing={1.5}>
-            {reports.map((report) => (
+            {reports.map((report, index) => (
               <Card
-                key={report.reportId}
+                key={`${report.reportId}-${index}`}
                 variant="outlined"
-                sx={{ p: 2, borderRadius: 2 }}
+                sx={{
+                  p: 2,
+                  borderRadius: 2,
+                }}
               >
                 <Box
                   sx={{
@@ -939,16 +1253,57 @@ function StudentDetailContent({ detail }: { detail: StudentDetail }) {
 }
 
 export default function StudentsPage() {
-  const { accessToken, loading: authLoading } = useAuth();
+  const { user, accessToken, loading: authLoading } = useAuth();
+
   const searchParams = useSearchParams();
 
+  const isSystemAdmin = user?.role === "system_admin";
+
+  const isSuperAdmin = user?.role === "super_admin";
+
   const schoolId = Number(searchParams.get("schoolId") || 0);
+
   const urlCourseId = Number(searchParams.get("courseId") || 0);
+
   const [selectedCourseId, setSelectedCourseId] = useState(urlCourseId);
+
   const [bc1Code, setBc1Code] = useState("");
+
   const [courseOptions, setCourseOptions] = useState<CourseSummary[]>([]);
+
   const [courseLoading, setCourseLoading] = useState(false);
+
   const [courseError, setCourseError] = useState("");
+
+  const [searchInput, setSearchInput] = useState("");
+
+  const [search, setSearch] = useState("");
+
+  const [status, setStatus] = useState<Bc2Status>("all");
+
+  const [examStatus, setExamStatus] = useState<ExamFilter>("all");
+
+  const [page, setPage] = useState(1);
+  const [reload, setReload] = useState(0);
+
+  const [result, setResult] = useState<StudentsPageResult | null>(null);
+
+  const [fetching, setFetching] = useState(false);
+  const [error, setError] = useState("");
+
+  const [selectedId, setSelectedId] = useState<number | null>(null);
+
+  const [detail, setDetail] = useState<StudentDetail | null>(null);
+
+  const [detailLoading, setDetailLoading] = useState(false);
+
+  const [detailError, setDetailError] = useState("");
+
+  const [formOpen, setFormOpen] = useState(false);
+
+  const [editingStudent, setEditingStudent] = useState<EditStudent | null>(
+    null
+  );
 
   useEffect(() => {
     setSelectedCourseId(urlCourseId);
@@ -956,15 +1311,27 @@ export default function StudentsPage() {
     setPage(1);
   }, [urlCourseId]);
 
+  /**
+   * Chỉ SUPER_ADMIN / ADMIN cần tải khóa học.
+   *
+   * SYSTEM_ADMIN không gọi API /bc2-view/courses.
+   */
   useEffect(() => {
-    if (!accessToken) return;
+    if (!accessToken || isSystemAdmin) {
+      setCourseOptions([]);
+      setCourseError("");
+      setCourseLoading(false);
+      return;
+    }
 
     let cancelled = false;
+
     setCourseLoading(true);
     setCourseError("");
 
     const fetchCourses = async () => {
       const collected: CourseSummary[] = [];
+
       let currentPage = 1;
       let totalPages = 1;
 
@@ -974,33 +1341,39 @@ export default function StudentsPage() {
           limit: 100,
           schoolId: schoolId || undefined,
         });
+
         if (cancelled) return;
+
         collected.push(...response.data);
         totalPages = response.pagination.totalPages;
         currentPage += 1;
       } while (currentPage <= totalPages);
 
-      if (!cancelled) setCourseOptions(collected);
+      if (!cancelled) {
+        setCourseOptions(collected);
+      }
     };
 
     void fetchCourses()
-      .catch((error: unknown) => {
+      .catch((err: unknown) => {
         if (!cancelled) {
           setCourseError(
-            error instanceof Error
-              ? error.message
+            err instanceof Error
+              ? err.message
               : "Không thể tải danh sách khóa học."
           );
         }
       })
       .finally(() => {
-        if (!cancelled) setCourseLoading(false);
+        if (!cancelled) {
+          setCourseLoading(false);
+        }
       });
 
     return () => {
       cancelled = true;
     };
-  }, [accessToken, schoolId]);
+  }, [accessToken, schoolId, isSystemAdmin]);
 
   const bc1Options = [
     ...new Set(
@@ -1014,34 +1387,12 @@ export default function StudentsPage() {
     ? courseOptions.filter((course) => course.bc1Code === bc1Code)
     : courseOptions;
 
-  const [searchInput, setSearchInput] = useState("");
-  const [search, setSearch] = useState("");
-
-  const [status, setStatus] = useState<Bc2Status>("all");
-  const [examStatus, setExamStatus] = useState<ExamFilter>("all");
-
-  const [page, setPage] = useState(1);
-  const [reload, setReload] = useState(0);
-
-  const [result, setResult] = useState<StudentsPageResult | null>(null);
-  const [fetching, setFetching] = useState(false);
-  const [error, setError] = useState("");
-
-  const [selectedId, setSelectedId] = useState<number | null>(null);
-  const [detail, setDetail] = useState<StudentDetail | null>(null);
-  const [detailLoading, setDetailLoading] = useState(false);
-  const [detailError, setDetailError] = useState("");
-
-  const [formOpen, setFormOpen] = useState(false);
-
-  const [editingStudent, setEditingStudent] = useState<
-    | (Partial<StudentFormData> & {
-        id: number;
-        hasPhoto?: boolean;
-      })
-    | null
-  >(null);
-
+  /**
+   * Tải danh sách học viên.
+   *
+   * Không truyền userId từ Client.
+   * Backend tự xác định quyền theo JWT.
+   */
   const load = useCallback(async () => {
     if (!accessToken) return;
 
@@ -1053,16 +1404,19 @@ export default function StudentsPage() {
         page,
         limit: 20,
         search,
-        schoolId: schoolId || undefined,
-        courseId: selectedCourseId || undefined,
-        bc2Status: status,
+
+        schoolId: isSystemAdmin ? undefined : schoolId || undefined,
+
+        courseId: isSystemAdmin ? undefined : selectedCourseId || undefined,
+
+        bc2Status: isSystemAdmin ? ("all" as const) : status,
+
         examStatus,
       };
 
-      // bc1Code requires corresponding server-side support in Bc2ViewService.students().
-      // This keeps pagination and summary consistent; no client-side page filtering.
       let response: StudentsPageResult;
-      if (bc1Code) {
+
+      if (bc1Code && !isSystemAdmin) {
         const query = new URLSearchParams({
           page: String(filters.page),
           limit: String(filters.limit),
@@ -1070,16 +1424,37 @@ export default function StudentsPage() {
           bc2Status: filters.bc2Status,
           examStatus: filters.examStatus,
         });
-        if (filters.search) query.set("search", filters.search);
-        if (filters.schoolId) query.set("schoolId", String(filters.schoolId));
-        if (filters.courseId) query.set("courseId", String(filters.courseId));
+
+        if (filters.search) {
+          query.set("search", filters.search);
+        }
+
+        if (filters.schoolId) {
+          query.set("schoolId", String(filters.schoolId));
+        }
+
+        if (filters.courseId) {
+          query.set("courseId", String(filters.courseId));
+        }
 
         const res = await fetch(`${API_URL}/bc2-view/students?${query}`, {
-          headers: { Authorization: `Bearer ${accessToken}` },
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+          },
           credentials: "include",
           cache: "no-store",
         });
-        if (!res.ok) throw new Error("Không thể lọc học viên theo BC1.");
+
+        if (!res.ok) {
+          const body = await res.json().catch(() => null);
+
+          throw new Error(
+            typeof body?.message === "string"
+              ? body.message
+              : "Không thể lọc học viên theo BC1."
+          );
+        }
+
         response = (await res.json()) as StudentsPageResult;
       } else {
         response = await listStudents(accessToken, filters);
@@ -1110,12 +1485,18 @@ export default function StudentsPage() {
     status,
     examStatus,
     reload,
+    isSystemAdmin,
   ]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
+  /**
+   * Xem chi tiết học viên.
+   *
+   * Backend bảo vệ việc truy cập ID.
+   */
   useEffect(() => {
     if (!selectedId || !accessToken) return;
 
@@ -1141,7 +1522,9 @@ export default function StudentsPage() {
         }
       })
       .finally(() => {
-        if (active) setDetailLoading(false);
+        if (active) {
+          setDetailLoading(false);
+        }
       });
 
     return () => {
@@ -1154,13 +1537,34 @@ export default function StudentsPage() {
     setFormOpen(true);
   };
 
+  /**
+   * Nạp thông tin học viên và hồ sơ tiếp nhận.
+   *
+   * SYSTEM_ADMIN chỉ nhận bản ghi intake
+   * thuộc tài khoản của mình từ Backend.
+   */
   const openEditStudent = async (id: number) => {
     if (!accessToken) return;
 
     try {
       const student = await getStudentDetail(accessToken, id);
 
-      setEditingStudent({
+      if (student.hasBc2) {
+        setError("Học viên đã có BC2, không được chỉnh sửa.");
+        return;
+      }
+
+      if (isSystemAdmin && student.sourceType !== "manual") {
+        setError("Bạn không thể sửa thông tin gốc của học viên đã import.");
+        return;
+      }
+
+      const ownIntake = isSystemAdmin
+        ? student.intakes?.find((item) => item.createdByUserId === user?.id)
+        : student.intakes?.find((item) => item.createdByUserId === user?.id) ??
+          student.intakes?.[0];
+
+      const editData: EditStudent = {
         id: student.id,
         hasPhoto: student.hasPhoto,
         registrationCode: student.registrationCode,
@@ -1174,9 +1578,42 @@ export default function StudentsPage() {
         nationalityName: student.nationalityName ?? "",
         permanentAddress: student.permanentAddress ?? "",
         currentAddress: student.currentAddress ?? "",
-      });
+      };
 
+      /**
+       * Chỉ đưa phần intake vào Form nếu
+       * thực sự có hồ sơ tiếp nhận tương ứng.
+       *
+       * Tránh gửi những field intake giả
+       * khi sửa học viên từ BC1/XML.
+       */
+      if (ownIntake) {
+        editData.applicationType = ownIntake.applicationType;
+
+        editData.requestedLicenseClass = ownIntake.requestedLicenseClass ?? "";
+
+        editData.trainingLicenseClass = ownIntake.trainingLicenseClass ?? "";
+
+        editData.examinationContent = ownIntake.examinationContent ?? "";
+
+        editData.certificateIssuer = ownIntake.certificateIssuer ?? "";
+
+        editData.identityIssuedDate = ownIntake.identityIssuedDate ?? "";
+
+        editData.note = ownIntake.note ?? "";
+
+        editData.documents = Array.isArray(ownIntake.documents)
+          ? ownIntake.documents
+          : [];
+
+        editData.existingLicenses = Array.isArray(ownIntake.existingLicenses)
+          ? ownIntake.existingLicenses
+          : [];
+      }
+
+      setEditingStudent(editData);
       setFormOpen(true);
+      setError("");
     } catch (err) {
       setError(
         err instanceof Error
@@ -1188,30 +1625,52 @@ export default function StudentsPage() {
 
   if (authLoading) {
     return (
-      <Box sx={{ display: "grid", placeItems: "center", py: 8 }}>
+      <Box
+        sx={{
+          display: "grid",
+          placeItems: "center",
+          py: 8,
+        }}
+      >
         <CircularProgress />
       </Box>
     );
   }
 
   return (
-    <Stack spacing={2.5} sx={{ minWidth: 0, maxWidth: "100%" }}>
+    <Stack
+      spacing={2.5}
+      sx={{
+        minWidth: 0,
+        maxWidth: "100%",
+      }}
+    >
       {/* HEADER */}
       <Stack
-        direction={{ xs: "column", sm: "row" }}
+        direction={{
+          xs: "column",
+          sm: "row",
+        }}
         sx={{
           justifyContent: "space-between",
-          alignItems: { xs: "stretch", sm: "center" },
+          alignItems: {
+            xs: "stretch",
+            sm: "center",
+          },
           spacing: 2,
         }}
       >
         <Box>
           <Typography variant="h5" sx={{ fontWeight: 800 }}>
-            Danh sách học viên
+            {isSystemAdmin
+              ? "Thí sinh tự do đã tiếp nhận"
+              : "Danh sách học viên"}
           </Typography>
 
           <Typography color="text.secondary" sx={{ mt: 0.5 }}>
-            Quản lý hồ sơ BC1, BC2 và lịch sử sát hạch.
+            {isSystemAdmin
+              ? "Tiếp nhận hồ sơ, quản lý và theo dõi kết quả sát hạch của các thí sinh do bạn phụ trách."
+              : "Quản lý hồ sơ BC1, BC2, thí sinh tự do và lịch sử sát hạch."}
           </Typography>
         </Box>
 
@@ -1220,9 +1679,11 @@ export default function StudentsPage() {
             variant="contained"
             startIcon={<AddOutlined />}
             onClick={openCreateStudent}
-            sx={{ textTransform: "none" }}
+            sx={{
+              textTransform: "none",
+            }}
           >
-            Thêm học viên
+            {isSystemAdmin ? "Tiếp nhận thí sinh tự do" : "Thêm học viên"}
           </Button>
 
           <Button
@@ -1230,7 +1691,9 @@ export default function StudentsPage() {
             startIcon={<RefreshOutlined />}
             onClick={() => setReload((value) => value + 1)}
             disabled={fetching}
-            sx={{ textTransform: "none" }}
+            sx={{
+              textTransform: "none",
+            }}
           >
             Tải lại
           </Button>
@@ -1238,10 +1701,24 @@ export default function StudentsPage() {
       </Stack>
 
       {error && <Alert severity="error">{error}</Alert>}
-      {courseError && <Alert severity="warning">{courseError}</Alert>}
+
+      {!isSystemAdmin && courseError && (
+        <Alert severity="warning">{courseError}</Alert>
+      )}
+
+      {isSystemAdmin && (
+        <Alert severity="info">
+          Danh sách chỉ hiển thị thí sinh tự do đã được tài khoản của bạn tiếp
+          nhận. Bạn không thể xem hoặc chỉnh sửa hồ sơ do nhân viên khác tiếp
+          nhận.
+        </Alert>
+      )}
 
       {/* SUMMARY */}
-      <SummaryCards summary={result?.summary ?? null} />
+      <SummaryCards
+        summary={result?.summary ?? null}
+        isSystemAdmin={isSystemAdmin}
+      />
 
       {/* FILTERS */}
       <Card
@@ -1252,62 +1729,71 @@ export default function StudentsPage() {
         }}
       >
         <Stack spacing={1.5}>
-          <Box
-            sx={{
-              display: "grid",
-              gridTemplateColumns: {
-                xs: "1fr",
-                md: "repeat(2, minmax(0, 1fr))",
-              },
-              gap: 1.5,
-            }}
-          >
-            <TextField
-              select
-              size="small"
-              fullWidth
-              label="BC1"
-              value={bc1Code}
-              disabled={courseLoading}
-              onChange={(event) => {
-                setBc1Code(event.target.value);
-                setSelectedCourseId(0);
-                setPage(1);
+          {!isSystemAdmin && (
+            <Box
+              sx={{
+                display: "grid",
+                gridTemplateColumns: {
+                  xs: "1fr",
+                  md: "repeat(2, minmax(0, 1fr))",
+                },
+                gap: 1.5,
               }}
             >
-              <MenuItem value="">Tất cả BC1</MenuItem>
-              {bc1Options.map((code) => (
-                <MenuItem key={code} value={code}>
-                  {code}
-                </MenuItem>
-              ))}
-            </TextField>
-            <TextField
-              select
-              size="small"
-              fullWidth
-              label="Khóa đào tạo"
-              value={selectedCourseId ? String(selectedCourseId) : ""}
-              disabled={courseLoading}
-              onChange={(event) => {
-                setSelectedCourseId(Number(event.target.value) || 0);
-                setPage(1);
-              }}
-            >
-              <MenuItem value="">Tất cả khóa đào tạo</MenuItem>
-              {visibleCourses.map((course) => (
-                <MenuItem key={course.id} value={String(course.id)}>
-                  {course.code}
-                  {course.name && course.name !== course.code
-                    ? ` — ${course.name}`
-                    : ""}
-                </MenuItem>
-              ))}
-            </TextField>
-          </Box>
+              <TextField
+                select
+                size="small"
+                fullWidth
+                label="BC1"
+                value={bc1Code}
+                disabled={courseLoading}
+                onChange={(event) => {
+                  setBc1Code(event.target.value);
+                  setSelectedCourseId(0);
+                  setPage(1);
+                }}
+              >
+                <MenuItem value="">Tất cả BC1</MenuItem>
+
+                {bc1Options.map((code) => (
+                  <MenuItem key={code} value={code}>
+                    {code}
+                  </MenuItem>
+                ))}
+              </TextField>
+
+              <TextField
+                select
+                size="small"
+                fullWidth
+                label="Khóa đào tạo"
+                value={selectedCourseId ? String(selectedCourseId) : ""}
+                disabled={courseLoading}
+                onChange={(event) => {
+                  setSelectedCourseId(Number(event.target.value) || 0);
+                  setPage(1);
+                }}
+              >
+                <MenuItem value="">Tất cả khóa đào tạo</MenuItem>
+
+                {visibleCourses.map((course) => (
+                  <MenuItem key={course.id} value={String(course.id)}>
+                    {course.code}
+                    {course.name && course.name !== course.code
+                      ? ` — ${course.name}`
+                      : ""}
+                  </MenuItem>
+                ))}
+              </TextField>
+            </Box>
+          )}
+
           <Stack
             component="form"
-            direction={{ xs: "column", md: "row" }}
+            direction={{
+              xs: "column",
+              md: "row",
+            }}
             spacing={1.5}
             onSubmit={(event) => {
               event.preventDefault();
@@ -1320,24 +1806,31 @@ export default function StudentsPage() {
               label="Họ tên, mã đăng ký, CCCD"
               value={searchInput}
               onChange={(event) => setSearchInput(event.target.value)}
-              sx={{ flex: 1, minWidth: { md: 200 } }}
+              sx={{
+                flex: 1,
+                minWidth: { md: 200 },
+              }}
             />
 
-            <TextField
-              select
-              size="small"
-              label="Trạng thái BC2"
-              value={status}
-              onChange={(event) => {
-                setStatus(event.target.value as Bc2Status);
-                setPage(1);
-              }}
-              sx={{ minWidth: { md: 165 } }}
-            >
-              <MenuItem value="all">Tất cả BC2</MenuItem>
-              <MenuItem value="has_bc2">Đã có BC2</MenuItem>
-              <MenuItem value="no_bc2">Chưa có BC2</MenuItem>
-            </TextField>
+            {!isSystemAdmin && (
+              <TextField
+                select
+                size="small"
+                label="Trạng thái BC2"
+                value={status}
+                onChange={(event) => {
+                  setStatus(event.target.value as Bc2Status);
+                  setPage(1);
+                }}
+                sx={{
+                  minWidth: { md: 165 },
+                }}
+              >
+                <MenuItem value="all">Tất cả BC2</MenuItem>
+                <MenuItem value="has_bc2">Đã có BC2</MenuItem>
+                <MenuItem value="no_bc2">Chưa có BC2</MenuItem>
+              </TextField>
+            )}
 
             <TextField
               select
@@ -1348,7 +1841,9 @@ export default function StudentsPage() {
                 setExamStatus(event.target.value as ExamFilter);
                 setPage(1);
               }}
-              sx={{ minWidth: { md: 170 } }}
+              sx={{
+                minWidth: { md: 170 },
+              }}
             >
               <MenuItem value="all">Tất cả kết quả</MenuItem>
               <MenuItem value="passed">Đã đậu</MenuItem>
@@ -1375,16 +1870,21 @@ export default function StudentsPage() {
           <Typography
             variant="caption"
             color="text.secondary"
-            sx={{ display: "block", mt: 1.5 }}
+            sx={{
+              display: "block",
+              mt: 1.5,
+            }}
           >
             Tìm thấy{" "}
             <strong>
               {(result?.pagination.total ?? 0).toLocaleString("vi-VN")}
             </strong>{" "}
-            học viên
-            {selectedCourseId > 0 ? " · Đang lọc theo khóa học" : ""}
-            {bc1Code ? ` · BC1: ${bc1Code}` : ""}
-            {schoolId > 0 ? " · Đang lọc theo trường" : ""}
+            {isSystemAdmin ? "thí sinh đã tiếp nhận" : "học viên"}
+            {!isSystemAdmin &&
+              selectedCourseId > 0 &&
+              " · Đang lọc theo khóa học"}
+            {!isSystemAdmin && bc1Code && ` · BC1: ${bc1Code}`}
+            {!isSystemAdmin && schoolId > 0 && " · Đang lọc theo trường"}
           </Typography>
         </Stack>
       </Card>
@@ -1413,6 +1913,8 @@ export default function StudentsPage() {
           <StudentTable
             students={result?.data ?? []}
             loading={fetching}
+            isSystemAdmin={isSystemAdmin}
+            showIntakeUser={isSuperAdmin}
             onEdit={(id) => void openEditStudent(id)}
             onDetail={setSelectedId}
           />
@@ -1435,14 +1937,14 @@ export default function StudentsPage() {
             <Pagination
               color="primary"
               page={page}
-              count={result!.pagination.totalPages}
+              count={result?.pagination.totalPages ?? 1}
               onChange={(_, value) => setPage(value)}
             />
           </Box>
         )}
       </Card>
 
-      {/* DETAIL */}
+      {/* STUDENT DETAIL */}
       <Dialog
         open={selectedId !== null}
         onClose={() => setSelectedId(null)}
@@ -1463,12 +1965,17 @@ export default function StudentsPage() {
             sx={{ justifyContent: "space-between", alignItems: "center" }}
           >
             <Box>
-              <Typography variant="h6" sx={{ fontWeight: 800 }}>
+              <Typography
+                variant="h6"
+                sx={{
+                  fontWeight: 800,
+                }}
+              >
                 Chi tiết hồ sơ học viên
               </Typography>
 
               <Typography variant="caption" color="text.secondary">
-                Thông tin cá nhân, BC1, BC2 và lịch sử sát hạch
+                Thông tin cá nhân, hồ sơ tiếp nhận, BC1, BC2 và lịch sử sát hạch
               </Typography>
             </Box>
 
@@ -1492,7 +1999,10 @@ export default function StudentsPage() {
           ) : detailError ? (
             <Alert severity="error">{detailError}</Alert>
           ) : detail ? (
-            <StudentDetailContent detail={detail} />
+            <StudentDetailContent
+              detail={detail}
+              showAllIntakes={isSuperAdmin}
+            />
           ) : null}
         </DialogContent>
       </Dialog>
@@ -1501,7 +2011,10 @@ export default function StudentsPage() {
       <StudentFormDialog
         open={formOpen}
         student={editingStudent}
-        onClose={() => setFormOpen(false)}
+        onClose={() => {
+          setFormOpen(false);
+          setEditingStudent(null);
+        }}
         onSaved={() => {
           setFormOpen(false);
           setEditingStudent(null);

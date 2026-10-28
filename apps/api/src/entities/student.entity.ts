@@ -17,6 +17,11 @@ export enum StudentCandidateType {
   UNKNOWN = 'unknown',
 }
 
+export enum StudentSourceType {
+  IMPORT = 'import',
+  MANUAL = 'manual',
+}
+
 @Entity('students')
 export class Student {
   @PrimaryGeneratedColumn()
@@ -120,6 +125,29 @@ export class Student {
     nullable: true,
   })
   candidateTypeUpdatedAt!: Date | null;
+
+  @Index('idx_students_created_by_user')
+  @Column({
+    name: 'created_by_user_id',
+    type: 'integer',
+    nullable: true,
+  })
+  createdByUserId!: number | null;
+
+  @Column({
+    name: 'updated_by_user_id',
+    type: 'integer',
+    nullable: true,
+  })
+  updatedByUserId!: number | null;
+
+  @Column({
+    name: 'source_type',
+    type: 'varchar',
+    length: 30,
+    default: StudentSourceType.IMPORT,
+  })
+  sourceType!: StudentSourceType;
 
   @OneToMany(() => Enrollment, (enrollment) => enrollment.student)
   enrollments!: Relation<Enrollment[]>;

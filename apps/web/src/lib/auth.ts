@@ -1,4 +1,4 @@
-export type UserRole = "super_admin" | "admin" | "user";
+export type UserRole = "super_admin" | "admin" | "system_admin" | "user";
 
 export type UserStatus = "active" | "inactive" | "suspended";
 
@@ -32,7 +32,11 @@ export async function apiRequest<T>(
 ): Promise<T> {
   const headers = new Headers(options.headers);
 
-  if (options.body && !headers.has("Content-Type")) {
+  if (
+    options.body &&
+    !(options.body instanceof FormData) &&
+    !headers.has("Content-Type")
+  ) {
     headers.set("Content-Type", "application/json");
   }
 
@@ -57,7 +61,7 @@ export async function apiRequest<T>(
         ? error.message.join(", ")
         : error.message || message;
     } catch {
-      // Keep default error message.
+      // Giữ thông báo mặc định.
     }
 
     throw new ApiError(message, response.status);
@@ -80,9 +84,7 @@ export function refreshSession() {
 }
 
 export function logout() {
-  return apiRequest<{ message: string }>("/auth/logout", {
-    method: "POST",
-  });
+  return apiRequest<{ message: string }>("/auth/logout", { method: "POST" });
 }
 
 export function getMe(accessToken: string) {

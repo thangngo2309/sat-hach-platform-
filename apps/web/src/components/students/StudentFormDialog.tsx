@@ -7,17 +7,27 @@ import {
   Avatar,
   Box,
   Button,
+  Checkbox,
   CircularProgress,
   Dialog,
   DialogActions,
   DialogContent,
   DialogTitle,
+  Divider,
+  FormControlLabel,
+  IconButton,
+  MenuItem,
   Stack,
   TextField,
   Typography,
 } from "@mui/material";
 
-import { CameraAltOutlined, SaveOutlined } from "@mui/icons-material";
+import {
+  AddOutlined,
+  CameraAltOutlined,
+  DeleteOutlineOutlined,
+  SaveOutlined,
+} from "@mui/icons-material";
 
 import { useAuth } from "@/components/auth/AuthProvider";
 import { StudentAvatar } from "@/components/students/StudentAvatar";
@@ -27,6 +37,7 @@ import {
   updateStudent,
   EMPTY_STUDENT_FORM,
   type StudentFormData,
+  type ExistingLicense,
 } from "@/lib/student-management";
 
 type StudentEditData = Partial<StudentFormData> & {
@@ -41,39 +52,89 @@ type Props = {
   onSaved: () => void;
 };
 
+const LICENSE_CLASSES = [
+  "A1",
+  "A",
+  "B1",
+  "B",
+  "C1",
+  "C",
+  "D1",
+  "D2",
+  "D",
+  "BE",
+  "C1E",
+  "CE",
+  "D1E",
+  "D2E",
+  "DE",
+];
+
+const DOCUMENTS = [
+  {
+    type: "health_certificate",
+    label: "Giấy chứng nhận sức khỏe",
+  },
+  {
+    type: "driving_experience",
+    label: "Giấy xác nhận quá trình lái xe",
+  },
+  {
+    type: "diploma",
+    label: "Bản sao văn bằng (nếu cần)",
+  },
+  {
+    type: "current_license_copy",
+    label: "Bản sao GPLX hiện có (nếu cần)",
+  },
+];
+
 function initialValues(student: StudentEditData | null): StudentFormData {
   if (!student) {
-    return { ...EMPTY_STUDENT_FORM };
+    return structuredClone(EMPTY_STUDENT_FORM);
   }
 
   return {
+    ...structuredClone(EMPTY_STUDENT_FORM),
+    ...student,
     registrationCode: student.registrationCode ?? "",
     fullName: student.fullName ?? "",
     familyName: student.familyName ?? "",
     givenName: student.givenName ?? "",
-    dateOfBirth: student.dateOfBirth ? student.dateOfBirth.slice(0, 10) : "",
-    gender: student.gender ?? "",
+    dateOfBirth: student.dateOfBirth?.slice(0, 10) ?? "",
+    gender: student.gender ?? "M",
     identityNumber: student.identityNumber ?? "",
-    nationalityCode: student.nationalityCode ?? "",
-    nationalityName: student.nationalityName ?? "",
+    nationalityCode: student.nationalityCode ?? "VN",
+    nationalityName: student.nationalityName ?? "Việt Nam",
     permanentAddress: student.permanentAddress ?? "",
     currentAddress: student.currentAddress ?? "",
+    documents:
+      student.documents ?? structuredClone(EMPTY_STUDENT_FORM.documents),
+    existingLicenses: student.existingLicenses ?? [],
   };
 }
 
-export function StudentFormDialog({ open, student, onClose, onSaved }: Props) {
-  const { accessToken } = useAuth();
+const emptyLicense = (): ExistingLicense => ({
+  number: "",
+  licenseClass: "",
+  issuedDate: "",
+  issuedBy: "",
+});
 
+export function StudentFormDialog({ open, student, onClose, onSaved }: Props) {
+  const { accessToken, user } = useAuth();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [form, setForm] = useState<StudentFormData>(initialValues(student));
 
   const [photo, setPhoto] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
   const editing = Boolean(student);
+  const isSystemAdmin = user?.role === "system_admin";
 
   useEffect(() => {
     if (!open) return;
@@ -93,10 +154,10 @@ export function StudentFormDialog({ open, student, onClose, onSaved }: Props) {
       return;
     }
 
-    const objectUrl = URL.createObjectURL(photo);
-    setPreviewUrl(objectUrl);
+    const url = URL.createObjectURL(photo);
+    setPreviewUrl(url);
 
-    return () => URL.revokeObjectURL(objectUrl);
+    return () => URL.revokeObjectURL(url);
   }, [photo]);
 
   const change = (field: keyof StudentFormData, value: string) => {
@@ -110,294 +171,538 @@ export function StudentFormDialog({ open, student, onClose, onSaved }: Props) {
     if (!file) return;
 
     if (file.size > 5 * 1024 * 1024) {
-      setError("Ảnh phải nhỏ hơn hoặc bằng 5 MB.");
+      setError("Ảnh không được vượt quá 5 MB.");
       return;
     }
 
-    const extension = file.name.split(".").pop()?.toLowerCase();
+    const ext = file.name.split(".").pop()?.toLowerCase();
 
-    if (!extension || !["jpg", "jpeg", "png", "jp2"].includes(extension)) {
-      setError("Chỉ hỗ trợ ảnh JPG, JPEG, PNG hoặc JP2.");
+    if (!ext || !["jpg", "jpeg", "png", "jp2"].includes(ext)) {
+      setError("Chỉ hỗ trợ JPG, PNG hoặc JP2.");
       return;
     }
 
-    setError("");
     setPhoto(file);
+    setError("");
   };
+
+  function changeLicense(
+    index: number,
+    key: keyof ExistingLicense,
+    value: string
+  ) {
+    setForm((current) => ({
+      ...current,
+      existingLicenses: current.existingLicenses.map((license, i) =>
+        i === index ? { ...license, [key]: value } : license
+      ),
+    }));
+  }
+
+  function changeDocument(type: string, checked: boolean) {
+    setForm((current) => ({
+      ...current,
+      documents: current.documents.map((item) =>
+        item.type === type ? { ...item, checked } : item
+      ),
+    }));
+  }
 
   const save = async () => {
     if (!accessToken || saving) return;
-
-    if (!form.registrationCode.trim()) {
-      setError("Vui lòng nhập mã đăng ký.");
-      return;
-    }
 
     if (!form.fullName.trim()) {
       setError("Vui lòng nhập họ và tên.");
       return;
     }
 
-    setError("");
+    if (!form.identityNumber.trim()) {
+      setError("Vui lòng nhập CCCD.");
+      return;
+    }
+
+    if (!form.dateOfBirth) {
+      setError("Vui lòng chọn ngày sinh.");
+      return;
+    }
+
+    if (!editing && !form.requestedLicenseClass) {
+      setError("Vui lòng chọn hạng đề nghị sát hạch.");
+      return;
+    }
+
     setSaving(true);
+    setError("");
 
     try {
+      const values: StudentFormData = {
+        ...form,
+        existingLicenses: form.existingLicenses.filter(
+          (item) => item.number.trim() || item.licenseClass.trim()
+        ),
+      };
+
       if (student) {
-        await updateStudent(accessToken, student.id, form, photo);
+        await updateStudent(accessToken, student.id, values, photo);
       } else {
-        await createStudent(accessToken, form, photo);
+        await createStudent(accessToken, values, photo);
       }
 
       onSaved();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Không thể lưu học viên.");
+      setError(err instanceof Error ? err.message : "Không thể lưu hồ sơ.");
     } finally {
       setSaving(false);
     }
   };
 
+  const field = (
+    label: string,
+    key: keyof StudentFormData,
+    required = false
+  ) => (
+    <TextField
+      fullWidth
+      size="small"
+      label={label}
+      required={required}
+      value={String(form[key] ?? "")}
+      disabled={saving}
+      onChange={(event) => change(key, event.target.value)}
+    />
+  );
+
   return (
     <Dialog
       open={open}
       onClose={saving ? undefined : onClose}
+      maxWidth="lg"
       fullWidth
-      maxWidth="md"
+      slotProps={{
+        paper: {
+          sx: {
+            borderRadius: 3,
+            maxHeight: "95vh",
+          },
+        },
+      }}
     >
       <DialogTitle component="div">
         <Typography variant="h6" sx={{ fontWeight: 800 }}>
-          {editing ? "Chỉnh sửa học viên" : "Thêm học viên"}
+          {editing
+            ? "Chỉnh sửa hồ sơ thí sinh"
+            : "Tiếp nhận hồ sơ thí sinh tự do"}
         </Typography>
 
         <Typography variant="body2" color="text.secondary">
-          {editing
-            ? "Cập nhật thông tin cá nhân và ảnh chân dung."
-            : "Tạo hồ sơ học viên và tải lên ảnh chân dung."}
+          {isSystemAdmin
+            ? "Hồ sơ được ghi nhận theo tài khoản tiếp nhận của bạn."
+            : "Nhập thông tin cá nhân và hồ sơ sát hạch."}
         </Typography>
       </DialogTitle>
 
       <DialogContent dividers>
-        <Stack spacing={3}>
+        <Stack spacing={2.5}>
           {error && <Alert severity="error">{error}</Alert>}
-
-          <Stack
-            direction={{ xs: "column", sm: "row" }}
-            spacing={2}
-            sx={{ alignItems: "center" }}
-          >
-            {previewUrl ? (
-              <Avatar
-                src={previewUrl}
-                variant="rounded"
-                sx={{ width: 112, height: 136 }}
-              />
-            ) : student ? (
-              <StudentAvatar
-                studentId={student.id}
-                fullName={student.fullName ?? ""}
-                size={112}
-              />
-            ) : (
-              <Avatar
-                variant="rounded"
-                sx={{
-                  width: 112,
-                  height: 136,
-                  bgcolor: "#e2e8f0",
-                  color: "#64748b",
-                }}
-              >
-                <CameraAltOutlined sx={{ fontSize: 42 }} />
-              </Avatar>
-            )}
-
-            <Box sx={{ flex: 1 }}>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".jpg,.jpeg,.png,.jp2,image/jpeg,image/png,image/jp2"
-                hidden
-                onChange={(event) => selectPhoto(event.target.files?.[0])}
-              />
-
-              <Stack direction="row" sx={{ spacing: 1, flexWrap: "wrap" }}>
-                <Button
-                  variant="outlined"
-                  startIcon={<CameraAltOutlined />}
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={saving}
-                  sx={{ textTransform: "none" }}
-                >
-                  {editing ? "Thay ảnh" : "Chọn ảnh"}
-                </Button>
-
-                {photo && (
-                  <Button
-                    size="small"
-                    color="inherit"
-                    onClick={() => {
-                      setPhoto(null);
-                      if (fileInputRef.current) {
-                        fileInputRef.current.value = "";
-                      }
-                    }}
-                    disabled={saving}
-                  >
-                    Bỏ ảnh vừa chọn
-                  </Button>
-                )}
-              </Stack>
-
-              <Typography
-                variant="caption"
-                color="text.secondary"
-                sx={{ display: "block", mt: 1 }}
-              >
-                JPG, PNG hoặc JP2. Tối đa 5 MB. Không chọn ảnh mới sẽ giữ nguyên
-                ảnh hiện tại.
-              </Typography>
-
-              {photo && (
-                <Typography variant="caption" sx={{ display: "block" }}>
-                  Đã chọn: {photo.name}
-                </Typography>
-              )}
-            </Box>
-          </Stack>
 
           <Box
             sx={{
               display: "grid",
               gridTemplateColumns: {
                 xs: "1fr",
-                sm: "repeat(2, minmax(0, 1fr))",
+                md: "1fr 1fr",
               },
-              gap: 2,
+              gap: 3,
             }}
           >
-            <TextField
-              label="Mã đăng ký"
-              required
-              value={form.registrationCode}
-              onChange={(event) =>
-                change("registrationCode", event.target.value)
-              }
-              disabled={editing || saving}
-              helperText={
-                editing
-                  ? "Mã đăng ký được khóa để bảo toàn liên kết dữ liệu."
-                  : undefined
-              }
-              slotProps={{
-                htmlInput: {
-                  maxLength: 150,
-                },
-              }}
-            />
+            {/* Cột thông tin cá nhân */}
+            <Stack spacing={2}>
+              <Typography variant="subtitle1" sx={{ fontWeight: 800 }}>
+                1. Thông tin thí sinh
+              </Typography>
 
-            <TextField
-              label="Họ và tên"
-              required
-              value={form.fullName}
-              onChange={(event) => change("fullName", event.target.value)}
-              disabled={saving}
-              slotProps={{
-                htmlInput: {
-                  maxLength: 255,
-                },
-              }}
-            />
+              <Stack
+                direction={{ xs: "column", sm: "row" }}
+                sx={{ spacing: 2, alignItems: "center" }}
+              >
+                {previewUrl ? (
+                  <Avatar
+                    src={previewUrl}
+                    variant="rounded"
+                    sx={{
+                      width: 110,
+                      height: 138,
+                    }}
+                  />
+                ) : student?.id ? (
+                  <StudentAvatar
+                    studentId={student.id}
+                    fullName={student.fullName ?? ""}
+                    size={110}
+                  />
+                ) : (
+                  <Avatar
+                    variant="rounded"
+                    sx={{
+                      width: 110,
+                      height: 138,
+                      bgcolor: "#e2e8f0",
+                      color: "#64748b",
+                    }}
+                  >
+                    <CameraAltOutlined sx={{ fontSize: 42 }} />
+                  </Avatar>
+                )}
 
-            <TextField
-              label="Họ và tên đệm"
-              value={form.familyName}
-              onChange={(event) => change("familyName", event.target.value)}
-              disabled={saving}
-            />
+                <Box>
+                  <input
+                    ref={fileInputRef}
+                    hidden
+                    type="file"
+                    accept=".jpg,.jpeg,.png,.jp2"
+                    onChange={(event) => selectPhoto(event.target.files?.[0])}
+                  />
 
-            <TextField
-              label="Tên"
-              value={form.givenName}
-              onChange={(event) => change("givenName", event.target.value)}
-              disabled={saving}
-            />
+                  <Button
+                    variant="outlined"
+                    startIcon={<CameraAltOutlined />}
+                    disabled={saving}
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    {editing ? "Thay ảnh" : "Chọn ảnh"}
+                  </Button>
 
-            <TextField
-              label="Ngày sinh"
-              type="date"
-              value={form.dateOfBirth}
-              onChange={(event) => change("dateOfBirth", event.target.value)}
-              disabled={saving}
-              slotProps={{
-                inputLabel: { shrink: true },
-              }}
-            />
+                  <Typography
+                    variant="caption"
+                    color="text.secondary"
+                    sx={{ display: "block", mt: 1 }}
+                  >
+                    JPG, PNG, JP2 — tối đa 5 MB
+                  </Typography>
+                </Box>
+              </Stack>
 
-            <TextField
-              select
-              label="Giới tính"
-              value={form.gender}
-              onChange={(event) => change("gender", event.target.value)}
-              disabled={saving}
-              slotProps={{
-                select: { native: true },
-              }}
-            >
-              <option value="M">Nam</option>
-              <option value="F">Nữ</option>
-            </TextField>
+              <TextField
+                label="Mã đăng ký"
+                size="small"
+                fullWidth
+                value={form.registrationCode}
+                disabled={editing || saving}
+                placeholder="Để trống để tự sinh mã TD"
+                helperText={
+                  editing
+                    ? "Không được thay đổi mã đăng ký."
+                    : "Hệ thống tự sinh mã nếu để trống."
+                }
+                onChange={(event) =>
+                  change("registrationCode", event.target.value)
+                }
+              />
 
-            <TextField
-              label="CCCD/CMND"
-              value={form.identityNumber}
-              onChange={(event) => change("identityNumber", event.target.value)}
-              disabled={saving}
-            />
+              {field("Họ và tên", "fullName", true)}
 
-            <TextField
-              label="Mã quốc tịch"
-              value={form.nationalityCode}
-              onChange={(event) =>
-                change("nationalityCode", event.target.value)
-              }
-              disabled={saving}
-            />
+              <Box
+                sx={{
+                  display: "grid",
+                  gridTemplateColumns: {
+                    xs: "1fr",
+                    sm: "1fr 1fr",
+                  },
+                  gap: 2,
+                }}
+              >
+                {field("Họ và tên đệm", "familyName")}
+                {field("Tên", "givenName")}
+              </Box>
 
-            <TextField
-              label="Tên quốc tịch"
-              value={form.nationalityName}
-              onChange={(event) =>
-                change("nationalityName", event.target.value)
-              }
-              disabled={saving}
-            />
+              <TextField
+                label="Ngày sinh"
+                type="date"
+                size="small"
+                required
+                value={form.dateOfBirth}
+                onChange={(event) => change("dateOfBirth", event.target.value)}
+                slotProps={{
+                  inputLabel: { shrink: true },
+                }}
+              />
 
-            <TextField
-              label="Địa chỉ thường trú"
-              value={form.permanentAddress}
-              onChange={(event) =>
-                change("permanentAddress", event.target.value)
-              }
-              disabled={saving}
-              multiline
-              minRows={2}
-              sx={{ gridColumn: { sm: "span 2" } }}
-            />
+              <TextField
+                label="Giới tính"
+                select
+                size="small"
+                value={form.gender}
+                onChange={(event) => change("gender", event.target.value)}
+              >
+                <MenuItem value="M">Nam</MenuItem>
+                <MenuItem value="F">Nữ</MenuItem>
+              </TextField>
 
-            <TextField
-              label="Địa chỉ cư trú"
-              value={form.currentAddress}
-              onChange={(event) => change("currentAddress", event.target.value)}
-              disabled={saving}
-              multiline
-              minRows={2}
-              sx={{ gridColumn: { sm: "span 2" } }}
-            />
+              {field("Số CCCD", "identityNumber", true)}
+
+              <TextField
+                label="Ngày cấp CCCD"
+                size="small"
+                type="date"
+                value={form.identityIssuedDate}
+                onChange={(event) =>
+                  change("identityIssuedDate", event.target.value)
+                }
+                slotProps={{
+                  inputLabel: { shrink: true },
+                }}
+              />
+
+              {field("Mã quốc tịch", "nationalityCode")}
+              {field("Quốc tịch", "nationalityName")}
+
+              <TextField
+                label="Địa chỉ thường trú"
+                size="small"
+                multiline
+                minRows={2}
+                value={form.permanentAddress}
+                onChange={(event) =>
+                  change("permanentAddress", event.target.value)
+                }
+              />
+
+              <TextField
+                label="Địa chỉ cư trú"
+                size="small"
+                multiline
+                minRows={2}
+                value={form.currentAddress}
+                onChange={(event) =>
+                  change("currentAddress", event.target.value)
+                }
+              />
+            </Stack>
+
+            {/* Cột thông tin sát hạch */}
+            <Stack spacing={2}>
+              <Typography variant="subtitle1" sx={{ fontWeight: 800 }}>
+                2. Thông tin sát hạch
+              </Typography>
+
+              <TextField
+                select
+                size="small"
+                label="Loại hồ sơ"
+                value={form.applicationType}
+                onChange={(event) =>
+                  change("applicationType", event.target.value)
+                }
+              >
+                <MenuItem value="new">Cấp mới</MenuItem>
+                <MenuItem value="upgrade">Nâng hạng</MenuItem>
+                <MenuItem value="reissue">Cấp lại</MenuItem>
+              </TextField>
+
+              <TextField
+                select
+                size="small"
+                label="Hạng đề nghị sát hạch"
+                required={!editing}
+                value={form.requestedLicenseClass}
+                onChange={(event) =>
+                  change("requestedLicenseClass", event.target.value)
+                }
+              >
+                <MenuItem value="">Chọn hạng</MenuItem>
+                {LICENSE_CLASSES.map((licenseClass) => (
+                  <MenuItem key={licenseClass} value={licenseClass}>
+                    {licenseClass}
+                  </MenuItem>
+                ))}
+              </TextField>
+
+              <TextField
+                select
+                size="small"
+                label="Hạng đào tạo"
+                value={form.trainingLicenseClass}
+                onChange={(event) =>
+                  change("trainingLicenseClass", event.target.value)
+                }
+              >
+                <MenuItem value="">Không có</MenuItem>
+                {LICENSE_CLASSES.map((licenseClass) => (
+                  <MenuItem key={licenseClass} value={licenseClass}>
+                    {licenseClass}
+                  </MenuItem>
+                ))}
+              </TextField>
+
+              {field("Nội dung sát hạch", "examinationContent")}
+
+              {field("Cơ quan cấp giấy tờ", "certificateIssuer")}
+
+              <Divider />
+
+              <Typography variant="subtitle1" sx={{ fontWeight: 800 }}>
+                3. Giấy tờ kèm theo
+              </Typography>
+
+              <Stack spacing={0.5}>
+                {DOCUMENTS.map((document) => {
+                  const checked =
+                    form.documents.find((item) => item.type === document.type)
+                      ?.checked ?? false;
+
+                  return (
+                    <FormControlLabel
+                      key={document.type}
+                      control={
+                        <Checkbox
+                          checked={checked}
+                          onChange={(event) =>
+                            changeDocument(document.type, event.target.checked)
+                          }
+                        />
+                      }
+                      label={document.label}
+                    />
+                  );
+                })}
+              </Stack>
+
+              <Divider />
+
+              <Stack
+                direction="row"
+                sx={{ alignItems: "center", justifyContent: "space-between" }}
+              >
+                <Typography variant="subtitle1" sx={{ fontWeight: 800 }}>
+                  4. GPLX hiện có
+                </Typography>
+
+                <Button
+                  size="small"
+                  startIcon={<AddOutlined />}
+                  onClick={() =>
+                    setForm((current) => ({
+                      ...current,
+                      existingLicenses: [
+                        ...current.existingLicenses,
+                        emptyLicense(),
+                      ],
+                    }))
+                  }
+                >
+                  Thêm GPLX
+                </Button>
+              </Stack>
+
+              {form.existingLicenses.map((license, index) => (
+                <Box
+                  key={index}
+                  sx={{
+                    border: "1px solid",
+                    borderColor: "divider",
+                    borderRadius: 2,
+                    p: 1.5,
+                  }}
+                >
+                  <Stack spacing={1.5}>
+                    <Stack
+                      direction="row"
+                      sx={{
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                      }}
+                    >
+                      <Typography variant="body2" sx={{ fontWeight: 700 }}>
+                        GPLX {index + 1}
+                      </Typography>
+
+                      <IconButton
+                        size="small"
+                        color="error"
+                        onClick={() =>
+                          setForm((current) => ({
+                            ...current,
+                            existingLicenses: current.existingLicenses.filter(
+                              (_, i) => i !== index
+                            ),
+                          }))
+                        }
+                      >
+                        <DeleteOutlineOutlined />
+                      </IconButton>
+                    </Stack>
+
+                    <TextField
+                      label="Số GPLX"
+                      size="small"
+                      value={license.number}
+                      onChange={(event) =>
+                        changeLicense(index, "number", event.target.value)
+                      }
+                    />
+
+                    <TextField
+                      select
+                      label="Hạng GPLX"
+                      size="small"
+                      value={license.licenseClass}
+                      onChange={(event) =>
+                        changeLicense(index, "licenseClass", event.target.value)
+                      }
+                    >
+                      <MenuItem value="">Chọn hạng</MenuItem>
+
+                      {LICENSE_CLASSES.map((code) => (
+                        <MenuItem key={code} value={code}>
+                          {code}
+                        </MenuItem>
+                      ))}
+                    </TextField>
+
+                    <TextField
+                      type="date"
+                      label="Ngày cấp GPLX"
+                      size="small"
+                      value={license.issuedDate}
+                      onChange={(event) =>
+                        changeLicense(index, "issuedDate", event.target.value)
+                      }
+                      slotProps={{
+                        inputLabel: { shrink: true },
+                      }}
+                    />
+
+                    <TextField
+                      label="Nơi cấp GPLX"
+                      size="small"
+                      value={license.issuedBy}
+                      onChange={(event) =>
+                        changeLicense(index, "issuedBy", event.target.value)
+                      }
+                    />
+                  </Stack>
+                </Box>
+              ))}
+
+              {form.existingLicenses.length === 0 && (
+                <Alert severity="info">Chưa khai báo GPLX hiện có.</Alert>
+              )}
+
+              <TextField
+                label="Ghi chú tiếp nhận"
+                size="small"
+                multiline
+                minRows={3}
+                value={form.note}
+                onChange={(event) => change("note", event.target.value)}
+              />
+            </Stack>
           </Box>
         </Stack>
       </DialogContent>
 
       <DialogActions sx={{ p: 2 }}>
-        <Button onClick={onClose} color="inherit" disabled={saving}>
+        <Button color="inherit" disabled={saving} onClick={onClose}>
           Hủy
         </Button>
 
@@ -413,7 +718,11 @@ export function StudentFormDialog({ open, student, onClose, onSaved }: Props) {
           disabled={saving || !accessToken}
           onClick={() => void save()}
         >
-          {saving ? "Đang lưu..." : editing ? "Lưu thay đổi" : "Thêm học viên"}
+          {saving
+            ? "Đang lưu..."
+            : editing
+            ? "Lưu thay đổi"
+            : "Tiếp nhận hồ sơ"}
         </Button>
       </DialogActions>
     </Dialog>

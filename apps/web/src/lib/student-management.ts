@@ -1,5 +1,17 @@
 import { API_URL, ApiError } from "@/lib/auth";
 
+export type StudentDocument = {
+  type: string;
+  checked: boolean;
+};
+
+export type ExistingLicense = {
+  number: string;
+  licenseClass: string;
+  issuedDate: string;
+  issuedBy: string;
+};
+
 export type StudentFormData = {
   registrationCode: string;
   fullName: string;
@@ -12,11 +24,25 @@ export type StudentFormData = {
   nationalityName: string;
   permanentAddress: string;
   currentAddress: string;
+
+  applicationType: string;
+  requestedLicenseClass: string;
+  trainingLicenseClass: string;
+  examinationContent: string;
+  certificateIssuer: string;
+  identityIssuedDate: string;
+  note: string;
+  documents: StudentDocument[];
+  existingLicenses: ExistingLicense[];
 };
 
-export type StudentSaved = StudentFormData & {
+export type StudentSaved = {
   id: number;
+  registrationCode: string;
+  fullName: string;
   hasPhoto: boolean;
+  createdByUserId?: number | null;
+  sourceType?: string;
 };
 
 export const EMPTY_STUDENT_FORM: StudentFormData = {
@@ -25,12 +51,27 @@ export const EMPTY_STUDENT_FORM: StudentFormData = {
   familyName: "",
   givenName: "",
   dateOfBirth: "",
-  gender: "",
+  gender: "M",
   identityNumber: "",
-  nationalityCode: "",
-  nationalityName: "",
+  nationalityCode: "VN",
+  nationalityName: "Việt Nam",
   permanentAddress: "",
   currentAddress: "",
+
+  applicationType: "new",
+  requestedLicenseClass: "",
+  trainingLicenseClass: "",
+  examinationContent: "",
+  certificateIssuer: "",
+  identityIssuedDate: "",
+  note: "",
+  documents: [
+    { type: "health_certificate", checked: false },
+    { type: "driving_experience", checked: false },
+    { type: "diploma", checked: false },
+    { type: "current_license_copy", checked: false },
+  ],
+  existingLicenses: [],
 };
 
 async function submitStudent(
@@ -43,7 +84,11 @@ async function submitStudent(
   const form = new FormData();
 
   for (const [key, value] of Object.entries(values)) {
-    form.append(key, value);
+    if (Array.isArray(value)) {
+      form.append(key, JSON.stringify(value));
+    } else {
+      form.append(key, value);
+    }
   }
 
   if (photo) {
@@ -70,7 +115,7 @@ async function submitStudent(
         ? message.join(", ")
         : typeof message === "string"
         ? message
-        : "Không thể lưu thông tin học viên.",
+        : "Không thể lưu hồ sơ học viên.",
       response.status
     );
   }

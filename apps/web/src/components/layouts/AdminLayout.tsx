@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { usePathname, useRouter } from "next/navigation";
 
 import {
   AppBar,
@@ -32,19 +31,17 @@ import {
   DescriptionOutlined,
   DirectionsCarOutlined,
   DriveFolderUploadOutlined,
-  EmojiEventsOutlined,
   ExpandLess,
   ExpandMore,
   GroupsOutlined,
-  HistoryOutlined,
   LogoutOutlined,
   MenuOutlined,
   PeopleOutlineOutlined,
   SchoolOutlined,
-  SettingsOutlined,
 } from "@mui/icons-material";
 
 import type { SvgIconComponent } from "@mui/icons-material";
+import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "@/components/auth/AuthProvider";
 
 const DRAWER_WIDTH = 260;
@@ -116,31 +113,15 @@ const importItems: MenuEntry[] = [
     href: "/imports/exam-result",
     icon: DriveFolderUploadOutlined,
   },
-  // {
-  //   label: "Lịch sử BC1",
-  //   href: "/import-history",
-  //   icon: HistoryOutlined,
-  // },
-  // {
-  //   label: "Lịch sử BC2",
-  //   href: "/imports/bc2/history",
-  //   icon: HistoryOutlined,
-  // },
 ];
 
 const systemItems: MenuEntry[] = [
-  // {
-  //   label: "Quản lý tài khoản",
-  //   href: "/users",
-  //   icon: PeopleOutlineOutlined,
-  //   superAdminOnly: true,
-  // },
-  // {
-  //   label: "Cài đặt",
-  //   href: "/settings",
-  //   icon: SettingsOutlined,
-  //   superAdminOnly: true,
-  // },
+  {
+    label: "Quản lý tài khoản",
+    href: "/users",
+    icon: PeopleOutlineOutlined,
+    superAdminOnly: true,
+  },
 ];
 
 const allItems = [...mainItems, ...importItems, ...systemItems];
@@ -153,6 +134,7 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
   const theme = useTheme();
+
   const isMobile = useMediaQuery(theme.breakpoints.down("md"));
 
   const { user, loading, signOut } = useAuth();
@@ -160,13 +142,25 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const [importExpanded, setImportExpanded] = useState(true);
+
   const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
 
   const isSuperAdmin = user?.role === "super_admin";
+  const isSystemAdmin = user?.role === "system_admin";
+
   const drawerWidth = collapsed ? COLLAPSED_WIDTH : DRAWER_WIDTH;
 
-  const currentItem =
-    allItems.find((item) => isRouteSelected(pathname, item.href)) ?? null;
+  const visibleMainItems = isSystemAdmin
+    ? mainItems.filter((item) => item.href === "/students")
+    : mainItems;
+
+  const visibleImportItems = isSystemAdmin ? [] : importItems;
+
+  const visibleSystemItems = isSuperAdmin ? systemItems : [];
+
+  const currentItem = allItems.find((item) =>
+    isRouteSelected(pathname, item.href)
+  );
 
   const pageTitle = currentItem?.label ?? "Quản lý sát hạch";
 
@@ -175,6 +169,18 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
       router.replace("/login");
     }
   }, [loading, user, router]);
+
+  useEffect(() => {
+    if (!loading && isSystemAdmin && pathname !== "/students") {
+      router.replace("/students");
+    }
+  }, [loading, isSystemAdmin, pathname, router]);
+
+  useEffect(() => {
+    if (!loading && user && pathname === "/users" && !isSuperAdmin) {
+      router.replace(isSystemAdmin ? "/students" : "/dashboard");
+    }
+  }, [loading, user, pathname, isSuperAdmin, isSystemAdmin, router]);
 
   useEffect(() => {
     setMobileOpen(false);
@@ -196,7 +202,9 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
   };
 
   const renderEntry = (item: MenuEntry, compact: boolean) => {
-    if (item.superAdminOnly && !isSuperAdmin) return null;
+    if (item.superAdminOnly && !isSuperAdmin) {
+      return null;
+    }
 
     const Icon = item.icon;
     const selected = isRouteSelected(pathname, item.href);
@@ -333,10 +341,23 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
 
           {!compact && (
             <Box sx={{ minWidth: 0 }}>
-              <Typography noWrap sx={{ fontSize: 15, fontWeight: 800 }}>
+              <Typography
+                noWrap
+                sx={{
+                  fontSize: 15,
+                  fontWeight: 800,
+                }}
+              >
                 SÁT HẠCH Ô TÔ
               </Typography>
-              <Typography noWrap sx={{ fontSize: 11, color: "#9eb6cf" }}>
+
+              <Typography
+                noWrap
+                sx={{
+                  fontSize: 11,
+                  color: "#9eb6cf",
+                }}
+              >
                 Hệ thống quản lý
               </Typography>
             </Box>
@@ -361,55 +382,68 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
         {renderSectionTitle("QUẢN LÝ", compact)}
 
         <List disablePadding>
-          {mainItems.map((item) => renderEntry(item, compact))}
+          {visibleMainItems.map((item) => renderEntry(item, compact))}
         </List>
 
-        {renderSectionTitle("DỮ LIỆU XML", compact)}
-
-        {compact ? (
-          <List disablePadding>
-            {importItems.map((item) => renderEntry(item, true))}
-          </List>
-        ) : (
+        {!isSystemAdmin && (
           <>
-            <ListItemButton
-              onClick={() => setImportExpanded((value) => !value)}
-              sx={{
-                mx: 1,
-                borderRadius: 2,
-                minHeight: 42,
-                color: "#aebed2",
-              }}
-            >
-              <ListItemIcon sx={{ minWidth: 40, color: "inherit" }}>
-                <DriveFolderUploadOutlined fontSize="small" />
-              </ListItemIcon>
+            {renderSectionTitle("DỮ LIỆU XML", compact)}
 
-              <ListItemText
-                primary="Quản lý import"
-                slotProps={{
-                  primary: {
-                    sx: { fontSize: 14, fontWeight: 600 },
-                  },
-                }}
-              />
-
-              {importExpanded ? <ExpandLess /> : <ExpandMore />}
-            </ListItemButton>
-
-            <Collapse in={importExpanded} timeout="auto">
+            {compact ? (
               <List disablePadding>
-                {importItems.map((item) => renderEntry(item, false))}
+                {visibleImportItems.map((item) => renderEntry(item, true))}
               </List>
-            </Collapse>
+            ) : (
+              <>
+                <ListItemButton
+                  onClick={() => setImportExpanded((value) => !value)}
+                  sx={{
+                    mx: 1,
+                    borderRadius: 2,
+                    minHeight: 42,
+                    color: "#aebed2",
+                  }}
+                >
+                  <ListItemIcon
+                    sx={{
+                      minWidth: 40,
+                      color: "inherit",
+                    }}
+                  >
+                    <DriveFolderUploadOutlined fontSize="small" />
+                  </ListItemIcon>
+
+                  <ListItemText
+                    primary="Quản lý import"
+                    slotProps={{
+                      primary: {
+                        sx: {
+                          fontSize: 14,
+                          fontWeight: 600,
+                        },
+                      },
+                    }}
+                  />
+
+                  {importExpanded ? <ExpandLess /> : <ExpandMore />}
+                </ListItemButton>
+
+                <Collapse in={importExpanded} timeout="auto">
+                  <List disablePadding>
+                    {visibleImportItems.map((item) => renderEntry(item, false))}
+                  </List>
+                </Collapse>
+              </>
+            )}
           </>
         )}
 
-        {isSuperAdmin && (
+        {visibleSystemItems.length > 0 && (
           <>
             {renderSectionTitle("HỆ THỐNG", compact)}
+
             <List disablePadding>
-              {systemItems.map((item) => renderEntry(item, compact))}
+              {visibleSystemItems.map((item) => renderEntry(item, compact))}
             </List>
           </>
         )}
@@ -441,11 +475,22 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
             <Box sx={{ minWidth: 0, flex: 1 }}>
               <Typography
                 noWrap
-                sx={{ color: "#fff", fontSize: 13, fontWeight: 700 }}
+                sx={{
+                  color: "#fff",
+                  fontSize: 13,
+                  fontWeight: 700,
+                }}
               >
                 {user?.fullName ?? ""}
               </Typography>
-              <Typography noWrap sx={{ color: "#9eb6cf", fontSize: 11 }}>
+
+              <Typography
+                noWrap
+                sx={{
+                  color: "#9eb6cf",
+                  fontSize: 11,
+                }}
+              >
                 @{user?.username ?? ""}
               </Typography>
             </Box>
@@ -481,8 +526,30 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
     );
   }
 
+  if (
+    (isSystemAdmin && pathname !== "/students") ||
+    (pathname === "/users" && !isSuperAdmin)
+  ) {
+    return (
+      <Box
+        sx={{
+          minHeight: "100vh",
+          display: "grid",
+          placeItems: "center",
+        }}
+      >
+        <CircularProgress />
+      </Box>
+    );
+  }
+
   return (
-    <Box sx={{ display: "flex", minHeight: "100vh" }}>
+    <Box
+      sx={{
+        display: "flex",
+        minHeight: "100vh",
+      }}
+    >
       <CssBaseline />
 
       <AppBar
@@ -502,18 +569,28 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
           }),
         }}
       >
-        <Toolbar sx={{ minHeight: "68px !important", gap: 1 }}>
-          {isMobile ? (
-            <IconButton onClick={() => setMobileOpen(true)}>
-              <MenuOutlined />
-            </IconButton>
-          ) : (
-            <IconButton onClick={() => setCollapsed((value) => !value)}>
-              <MenuOutlined />
-            </IconButton>
-          )}
+        <Toolbar
+          sx={{
+            minHeight: "68px !important",
+            gap: 1,
+          }}
+        >
+          <IconButton
+            onClick={() =>
+              isMobile ? setMobileOpen(true) : setCollapsed((value) => !value)
+            }
+          >
+            <MenuOutlined />
+          </IconButton>
 
-          <Typography noWrap sx={{ fontWeight: 700, flex: 1, fontSize: 17 }}>
+          <Typography
+            noWrap
+            sx={{
+              fontWeight: 700,
+              flex: 1,
+              fontSize: 17,
+            }}
+          >
             {pageTitle}
           </Typography>
 
@@ -536,10 +613,22 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
             open={Boolean(menuAnchor)}
             onClose={() => setMenuAnchor(null)}
           >
-            <Box sx={{ px: 2, py: 1, minWidth: 190 }}>
-              <Typography sx={{ fontWeight: 700, fontSize: 14 }}>
+            <Box
+              sx={{
+                px: 2,
+                py: 1,
+                minWidth: 190,
+              }}
+            >
+              <Typography
+                sx={{
+                  fontWeight: 700,
+                  fontSize: 14,
+                }}
+              >
                 {user.fullName}
               </Typography>
+
               <Typography variant="caption" color="text.secondary">
                 @{user.username}
               </Typography>
@@ -561,7 +650,10 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
         onClose={() => setMobileOpen(false)}
         ModalProps={{ keepMounted: true }}
         sx={{
-          display: { xs: "block", md: "none" },
+          display: {
+            xs: "block",
+            md: "none",
+          },
           "& .MuiDrawer-paper": {
             width: DRAWER_WIDTH,
             border: 0,
@@ -575,16 +667,17 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
         variant="permanent"
         open
         sx={{
-          display: { xs: "none", md: "block" },
+          display: {
+            xs: "none",
+            md: "block",
+          },
           width: drawerWidth,
           flexShrink: 0,
           "& .MuiDrawer-paper": {
             width: drawerWidth,
             border: 0,
             boxSizing: "border-box",
-            transition: theme.transitions.create("width", {
-              duration: 200,
-            }),
+            transition: theme.transitions.create("width", { duration: 200 }),
           },
         }}
       >
@@ -602,9 +695,7 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
           minHeight: "100vh",
           bgcolor: "#f5f7fb",
           pt: "68px",
-          transition: theme.transitions.create("width", {
-            duration: 200,
-          }),
+          transition: theme.transitions.create("width", { duration: 200 }),
         }}
       >
         <Box

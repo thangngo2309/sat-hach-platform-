@@ -7,6 +7,10 @@ import {
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 
+import { StudentAccessService } from '../students/student-access.service.js';
+import { UserRole } from '../../entities/user.entity.js';
+import type { AuthUser } from '../../shared/types/auth-user.type.js';
+
 export type Bc2ViewQuery = {
   page?: string;
   limit?: string;
@@ -32,9 +36,11 @@ export class Bc2ViewService {
   constructor(
     @InjectDataSource()
     private readonly db: DataSource,
+
+    private readonly studentAccess: StudentAccessService,
   ) {}
 
-  private positiveInt(value: string | undefined, fallback: number) {
+  private positiveInt(value: string | undefined, fallback: number): number {
     if (!value) return fallback;
 
     if (!/^[1-9]\d*$/.test(value)) {
@@ -83,13 +89,6 @@ export class Bc2ViewService {
     };
   }
 
-  /**
-   * Truy vấn thống kê theo studentId.
-   *
-   * Không phụ thuộc BC1, BC2 hay enrollments.
-   * Một dòng examination_candidates tương ứng
-   * với một học viên trong một kỳ sát hạch.
-   */
   private readonly examStatsLateral = `
     LEFT JOIN LATERAL (
       SELECT
@@ -131,8 +130,7 @@ export class Bc2ViewService {
           )
           FROM examination_candidates last_ec
           JOIN examination_sessions last_es
-            ON last_es.id =
-               last_ec.examination_session_id
+            ON last_es.id = last_ec.examination_session_id
           WHERE last_ec.student_id = s.id
           ORDER BY
             last_es.exam_date DESC NULLS LAST,
@@ -146,7 +144,7 @@ export class Bc2ViewService {
     ) exam ON TRUE
   `;
 
-  private studentExamStatusSql = `
+  private readonly studentExamStatusSql = `
     CASE
       WHEN COALESCE(exam."hasPassed", FALSE)
         THEN 'passed'
@@ -158,12 +156,19 @@ export class Bc2ViewService {
     END
   `;
 
-  private studentWhere = `
+  /**
+   * $1: search
+   * $2: schoolId
+   * $3: courseId
+   * $4: bc2Status
+   */
+  private readonly studentWhere = `
     WHERE (
-      $1 = ''
-      OR s.registration_code ILIKE '%' || $1 || '%'
-      OR s.full_name ILIKE '%' || $1 || '%'
-      OR COALESCE(s.identity_number, '') ILIKE '%' || $1 || '%'
+      $1::text = ''
+      OR s.registration_code ILIKE '%' || $1::text || '%'
+      OR s.full_name ILIKE '%' || $1::text || '%'
+      OR COALESCE(s.identity_number, '')
+        ILIKE '%' || $1::text || '%'
     )
 
     AND (
@@ -197,9 +202,9 @@ export class Bc2ViewService {
     )
 
     AND (
-      $4 = 'all'
+      $4::text = 'all'
       OR (
-        $4 = 'has_bc2'
+        $4::text = 'has_bc2'
         AND EXISTS (
           SELECT 1
           FROM bc2_candidates bc
@@ -207,7 +212,7 @@ export class Bc2ViewService {
         )
       )
       OR (
-        $4 = 'no_bc2'
+        $4::text = 'no_bc2'
         AND NOT EXISTS (
           SELECT 1
           FROM bc2_candidates bc
@@ -217,79 +222,206 @@ export class Bc2ViewService {
     )
   `;
 
+  /**
+   * $5: examStatus
+   */
   private readonly examFilter = `
     AND (
-      $5 = 'all'
+      $5::text = 'all'
       OR (
-        $5 IN (
+        $5::text IN (
           'passed',
           'failed',
           'pending',
           'not_examined'
         )
         AND (
-          CASE
-            WHEN COALESCE(exam."hasPassed", FALSE)
-              THEN 'passed'
-            WHEN COALESCE(exam."examResultCount", 0) > 0
-              THEN 'failed'
-            WHEN COALESCE(exam."examSessionCount", 0) > 0
-              THEN 'pending'
-            ELSE 'not_examined'
-          END
-        ) = $5
+          ${this.studentExamStatusSql}
+        ) = $5::text
       )
       OR (
-        $5 = 'absent'
+        $5::text = 'absent'
         AND COALESCE(exam."everAbsent", FALSE)
       )
       OR (
-        $5 = 'retake'
+        $5::text = 'retake'
         AND COALESCE(exam."examSessionCount", 0) >= 2
       )
     )
   `;
 
-  async students(query: Bc2ViewQuery) {
+  /**
+   * SYSTEM_ADMIN: $6 là ID tài khoản từ JWT.
+   * Những role khác không có điều kiện sở hữu.
+   */
+  private listOwnerCondition(user: AuthUser): string {
+    if (user.role !== UserRole.SYSTEM_ADMIN) {
+      return '';
+    }
+
+    return `
+      AND EXISTS (
+        SELECT 1
+        FROM student_intakes si
+        WHERE si.student_id = s.id
+          AND si.created_by_user_id = $6::int
+      )
+    `;
+  }
+
+  /**
+   * Summary không chứa examStatus:
+   * SYSTEM_ADMIN ID nằm ở vị trí $5.
+   */
+  private summaryOwnerCondition(user: AuthUser): string {
+    if (user.role !== UserRole.SYSTEM_ADMIN) {
+      return '';
+    }
+
+    return `
+      AND EXISTS (
+        SELECT 1
+        FROM student_intakes si
+        WHERE si.student_id = s.id
+          AND si.created_by_user_id = $5::int
+      )
+    `;
+  }
+
+  /**
+   * Trả về nhân viên tiếp nhận.
+   *
+   * SYSTEM_ADMIN: lấy đúng intake của tài khoản hiện tại.
+   * SUPER_ADMIN / ADMIN: lấy người tiếp nhận đầu tiên.
+   *
+   * Không tạo thêm tham số SQL ngoài listParams.
+   */
+  private intakeUserSql(user: AuthUser): string {
+    const ownershipFilter =
+      user.role === UserRole.SYSTEM_ADMIN
+        ? 'AND si.created_by_user_id = $6::int'
+        : '';
+
+    return `
+      (
+        SELECT jsonb_build_object(
+          'id', u.id,
+          'fullName', u.full_name,
+          'username', u.username
+        )
+        FROM student_intakes si
+        JOIN users u
+          ON u.id = si.created_by_user_id
+        WHERE si.student_id = s.id
+          ${ownershipFilter}
+        ORDER BY si.created_at ASC, si.id ASC
+        LIMIT 1
+      )
+    `;
+  }
+
+  async students(query: Bc2ViewQuery, user: AuthUser) {
+    this.studentAccess.ensureStudentRole(user);
+
     const f = this.filters(query);
 
-    const params: unknown[] = [
-      f.search,
-      f.schoolId,
-      f.courseId,
-      f.status,
-      f.examStatus,
-    ];
+    const isSystemAdmin = user.role === UserRole.SYSTEM_ADMIN;
+
+    /**
+     * Tham số dùng cho bộ lọc chung.
+     */
+    const baseParams: unknown[] = [f.search, f.schoolId, f.courseId, f.status];
+
+    /**
+     * SUPER_ADMIN / ADMIN:
+     * $1-$5 = bộ lọc
+     *
+     * SYSTEM_ADMIN:
+     * $1-$5 = bộ lọc
+     * $6 = user.sub
+     */
+    const listParams: unknown[] = [...baseParams, f.examStatus];
+
+    if (isSystemAdmin) {
+      listParams.push(user.sub);
+    }
+
+    /**
+     * Summary không có examStatus.
+     *
+     * SUPER_ADMIN / ADMIN: 4 tham số.
+     * SYSTEM_ADMIN: 5 tham số.
+     */
+    const summaryParams: unknown[] = isSystemAdmin
+      ? [...baseParams, user.sub]
+      : [...baseParams];
 
     const from = `
       FROM students s
       ${this.examStatsLateral}
     `;
 
-    const where = `
+    const listWhere = `
       ${this.studentWhere}
       ${this.examFilter}
+      ${this.listOwnerCondition(user)}
     `;
+
+    const summaryWhere = `
+      ${this.studentWhere}
+      ${this.summaryOwnerCondition(user)}
+    `;
+
+    const limitParam = listParams.length + 1;
+    const offsetParam = listParams.length + 2;
+
+    /**
+     * QUAN TRỌNG:
+     * Chỉ truyền các tham số thực sự được SQL sử dụng.
+     *
+     * SYSTEM_ADMIN:
+     * $1 search
+     * $2 schoolId
+     * $3 courseId
+     * $4 bc2Status
+     * $5 examStatus
+     * $6 userId
+     * $7 limit
+     * $8 offset
+     */
+    const paginationParams: unknown[] = [
+      ...listParams,
+      f.limit,
+      (f.page - 1) * f.limit,
+    ];
 
     const [countRows, data, summaryRows] = await Promise.all([
       this.db.query(
         `
             SELECT COUNT(*)::int AS total
             ${from}
-            ${where}
+            ${listWhere}
           `,
-        params,
+        listParams,
       ),
 
       this.db.query(
         `
             SELECT
               s.id,
+
               (s.photo_id IS NOT NULL) AS "hasPhoto",
+
               s.registration_code AS "registrationCode",
               s.full_name AS "fullName",
               s.date_of_birth AS "dateOfBirth",
               s.identity_number AS "identityNumber",
+
+              s.created_by_user_id AS "createdByUserId",
+              s.updated_by_user_id AS "updatedByUserId",
+              s.source_type AS "sourceType",
+
+              ${this.intakeUserSql(user)} AS "intakeUser",
 
               (
                 SELECT COUNT(*)::int
@@ -325,8 +457,7 @@ export class Bc2ViewService {
                 exam."everAbsent", FALSE
               ) AS "everAbsent",
 
-              ${this.studentExamStatusSql}
-                AS "examStatus",
+              ${this.studentExamStatusSql} AS "examStatus",
 
               exam."latestExam" AS "latestExam",
 
@@ -335,6 +466,10 @@ export class Bc2ViewService {
                   jsonb_build_object(
                     'id', c.id,
                     'code', c.code,
+                    'name', c.name,
+                    'bc1Code', c.bc1_code,
+                    'licenseClass', c.license_class,
+                    'schoolCode', sc.code,
                     'schoolName', sc.name,
                     'fileNumber', e.file_number
                   )
@@ -371,20 +506,16 @@ export class Bc2ViewService {
               ), '[]'::jsonb) AS "bc2Reports"
 
             ${from}
-            ${where}
+            ${listWhere}
 
             ORDER BY s.id DESC
-            LIMIT $6 OFFSET $7
+
+            LIMIT $${limitParam}
+            OFFSET $${offsetParam}
           `,
-        [...params, f.limit, (f.page - 1) * f.limit],
+        paginationParams,
       ),
 
-      /**
-       * Tổng quan dựa trên tất cả học viên
-       * phù hợp tìm kiếm/trường/khóa/BC2.
-       * Không chịu ảnh hưởng bởi bộ lọc examStatus
-       * để các ô thống kê không thay đổi khi lọc.
-       */
       this.db.query(
         `
             SELECT
@@ -400,21 +531,21 @@ export class Bc2ViewService {
                 WHERE NOT COALESCE(
                   exam."hasPassed", FALSE
                 )
-                  AND COALESCE(
-                    exam."examResultCount", 0
-                  ) > 0
+                AND COALESCE(
+                  exam."examResultCount", 0
+                ) > 0
               )::int AS failed,
 
               COUNT(*) FILTER (
                 WHERE NOT COALESCE(
                   exam."hasPassed", FALSE
                 )
-                  AND COALESCE(
-                    exam."examResultCount", 0
-                  ) = 0
-                  AND COALESCE(
-                    exam."examSessionCount", 0
-                  ) > 0
+                AND COALESCE(
+                  exam."examResultCount", 0
+                ) = 0
+                AND COALESCE(
+                  exam."examSessionCount", 0
+                ) > 0
               )::int AS pending,
 
               COUNT(*) FILTER (
@@ -436,9 +567,9 @@ export class Bc2ViewService {
               )::int AS retake
 
             ${from}
-            ${this.studentWhere}
+            ${summaryWhere}
           `,
-        params.slice(0, 4),
+        summaryParams,
       ),
     ]);
 
@@ -466,16 +597,24 @@ export class Bc2ViewService {
     };
   }
 
-  async studentDetail(id: number) {
+  async studentDetail(id: number, user: AuthUser) {
     if (!Number.isSafeInteger(id) || id < 1) {
       throw new BadRequestException('ID học viên không hợp lệ.');
     }
+
+    this.studentAccess.ensureStudentRole(user);
+
+    await this.studentAccess.assertCanView(id, user);
+
+    const isSystemAdmin = user.role === UserRole.SYSTEM_ADMIN;
 
     const students = await this.db.query(
       `
         SELECT
           s.id,
+
           (s.photo_id IS NOT NULL) AS "hasPhoto",
+
           s.registration_code AS "registrationCode",
           s.full_name AS "fullName",
           s.family_name AS "familyName",
@@ -487,6 +626,10 @@ export class Bc2ViewService {
           s.nationality_name AS "nationalityName",
           s.permanent_address AS "permanentAddress",
           s.current_address AS "currentAddress",
+
+          s.created_by_user_id AS "createdByUserId",
+          s.updated_by_user_id AS "updatedByUserId",
+          s.source_type AS "sourceType",
 
           COALESCE(
             exam."examSessionCount", 0
@@ -504,8 +647,7 @@ export class Bc2ViewService {
             exam."everAbsent", FALSE
           ) AS "everAbsent",
 
-          ${this.studentExamStatusSql}
-            AS "examStatus",
+          ${this.studentExamStatusSql} AS "examStatus",
 
           exam."latestExam" AS "latestExam"
 
@@ -520,9 +662,10 @@ export class Bc2ViewService {
       throw new NotFoundException('Không tìm thấy học viên.');
     }
 
-    const [courses, bc2Reports, examHistory, partStats] = await Promise.all([
-      this.db.query(
-        `
+    const [courses, bc2Reports, examHistory, partStats, intakes] =
+      await Promise.all([
+        this.db.query(
+          `
           SELECT
             c.id,
             c.code,
@@ -540,11 +683,11 @@ export class Bc2ViewService {
           WHERE e.student_id = $1
           ORDER BY c.id
         `,
-        [id],
-      ),
+          [id],
+        ),
 
-      this.db.query(
-        `
+        this.db.query(
+          `
           SELECT
             r.id AS "reportId",
             r.bc2_code AS "bc2Code",
@@ -554,14 +697,19 @@ export class Bc2ViewService {
             r.document_date AS "documentDate",
             bc.source_order AS "sourceOrder",
             bc.file_number AS "fileNumber",
+
             bc.requested_license_class
               AS "requestedLicenseClass",
+
             bc.previous_license_number
               AS "previousLicenseNumber",
+
             bc.previous_license_class
               AS "previousLicenseClass",
+
             bc.exam_content_code AS "examContentCode",
             bc.source_data AS "sourceData"
+
           FROM bc2_candidates bc
           JOIN bc2_reports r
             ON r.id = bc.report_id
@@ -570,16 +718,11 @@ export class Bc2ViewService {
           WHERE bc.student_id = $1
           ORDER BY r.id DESC
         `,
-        [id],
-      ),
+          [id],
+        ),
 
-      /**
-       * Mỗi phần tử examHistory là một kỳ sát hạch.
-       * Đã có file 48 nhưng chưa KQSH:
-       * hasResult = false, parts = [].
-       */
-      this.db.query(
-        `
+        this.db.query(
+          `
           SELECT
             ec.id,
             es.id AS "sessionId",
@@ -634,33 +777,29 @@ export class Bc2ViewService {
             ON es.id = ec.examination_session_id
           JOIN examination_centers center
             ON center.id = es.examination_center_id
-
           WHERE ec.student_id = $1
-
           ORDER BY
             es.exam_date ASC NULLS LAST,
             es.id ASC,
             ec.id ASC
         `,
-        [id],
-      ),
+          [id],
+        ),
 
-      /**
-       * Đếm số bản ghi kết quả từng phần thi.
-       * Dùng examType thực tế trong DB, không
-       * giả định tất cả hạng đều có cùng bài thi.
-       */
-      this.db.query(
-        `
+        this.db.query(
+          `
           SELECT
             r.exam_type AS "examType",
             COUNT(*)::int AS "attemptCount",
+
             COUNT(*) FILTER (
               WHERE r.result_status = 'DA'
             )::int AS "passedCount",
+
             COUNT(*) FILTER (
               WHERE r.result_status = 'RO'
             )::int AS "failedCount",
+
             COUNT(*) FILTER (
               WHERE r.result_status = 'VA'
             )::int AS "absentCount"
@@ -668,15 +807,66 @@ export class Bc2ViewService {
           FROM examination_candidates ec
           JOIN examination_candidate_results r
             ON r.examination_candidate_id = ec.id
-
           WHERE ec.student_id = $1
-
           GROUP BY r.exam_type
           ORDER BY r.exam_type
         `,
-        [id],
-      ),
-    ]);
+          [id],
+        ),
+
+        this.db.query(
+          `
+          SELECT
+            si.id,
+            si.student_id AS "studentId",
+            si.created_by_user_id AS "createdByUserId",
+            si.updated_by_user_id AS "updatedByUserId",
+            si.intake_type AS "intakeType",
+            si.application_type AS "applicationType",
+
+            si.requested_license_class
+              AS "requestedLicenseClass",
+
+            si.training_license_class
+              AS "trainingLicenseClass",
+
+            si.examination_content
+              AS "examinationContent",
+
+            si.certificate_issuer AS "certificateIssuer",
+            si.identity_issued_date::text
+              AS "identityIssuedDate",
+
+            si.note,
+            si.documents,
+            si.existing_licenses AS "existingLicenses",
+
+            si.created_at AS "createdAt",
+            si.updated_at AS "updatedAt",
+
+            u.full_name AS "createdByName",
+            u.username AS "createdByUsername",
+            editor.full_name AS "updatedByName"
+
+          FROM student_intakes si
+
+          JOIN users u
+            ON u.id = si.created_by_user_id
+
+          LEFT JOIN users editor
+            ON editor.id = si.updated_by_user_id
+
+          WHERE si.student_id = $1
+            AND (
+              $2::boolean = FALSE
+              OR si.created_by_user_id = $3::int
+            )
+
+          ORDER BY si.created_at DESC, si.id DESC
+        `,
+          [id, isSystemAdmin, user.sub],
+        ),
+      ]);
 
     return {
       ...students[0],
@@ -684,6 +874,7 @@ export class Bc2ViewService {
       bc2Reports,
       examHistory,
       partStats,
+      intakes,
     };
   }
 
@@ -694,10 +885,10 @@ export class Bc2ViewService {
 
     const where = `
       WHERE (
-        $1 = ''
-        OR c.code ILIKE '%' || $1 || '%'
-        OR c.name ILIKE '%' || $1 || '%'
-        OR sc.name ILIKE '%' || $1 || '%'
+        $1::text = ''
+        OR c.code ILIKE '%' || $1::text || '%'
+        OR c.name ILIKE '%' || $1::text || '%'
+        OR sc.name ILIKE '%' || $1::text || '%'
       )
       AND (
         $2::int IS NULL
@@ -705,63 +896,62 @@ export class Bc2ViewService {
       )
     `;
 
-    const countRows = await this.db.query(
-      `
-        SELECT COUNT(*)::int AS total
-        FROM courses c
-        JOIN training_schools sc
-          ON sc.id = c.school_id
-        ${where}
-      `,
-      params,
-    );
+    const [countRows, data] = await Promise.all([
+      this.db.query(
+        `
+          SELECT COUNT(*)::int AS total
+          FROM courses c
+          JOIN training_schools sc
+            ON sc.id = c.school_id
+          ${where}
+        `,
+        params,
+      ),
 
-    const data = await this.db.query(
-      `
-        SELECT
-          c.id,
-          c.code,
-          c.name,
-          c.bc1_code AS "bc1Code",
-          c.license_class AS "licenseClass",
-          c.opening_date AS "openingDate",
-          c.school_id AS "schoolId",
-          sc.name AS "schoolName",
+      this.db.query(
+        `
+          SELECT
+            c.id,
+            c.code,
+            c.name,
+            c.bc1_code AS "bc1Code",
+            c.license_class AS "licenseClass",
+            c.opening_date AS "openingDate",
+            c.school_id AS "schoolId",
+            sc.name AS "schoolName",
 
-          (
-            SELECT COUNT(*)::int
-            FROM enrollments e
-            WHERE e.course_id = c.id
-          ) AS "studentCount",
+            (
+              SELECT COUNT(*)::int
+              FROM enrollments e
+              WHERE e.course_id = c.id
+            ) AS "studentCount",
 
-          (
-            SELECT COUNT(*)::int
-            FROM enrollments e
-            WHERE e.course_id = c.id
-              AND EXISTS (
-                SELECT 1
-                FROM bc2_candidates bc
-                JOIN bc2_reports r
-                  ON r.id = bc.report_id
-                WHERE bc.student_id = e.student_id
-                  AND r.school_id = c.school_id
-                  AND r.bc1_code = c.bc1_code
-                  AND c.bc1_code IS NOT NULL
-              )
-          ) AS "bc2MatchedCount"
+            (
+              SELECT COUNT(*)::int
+              FROM enrollments e
+              WHERE e.course_id = c.id
+                AND EXISTS (
+                  SELECT 1
+                  FROM bc2_candidates bc
+                  JOIN bc2_reports r
+                    ON r.id = bc.report_id
+                  WHERE bc.student_id = e.student_id
+                    AND r.school_id = c.school_id
+                    AND r.bc1_code = c.bc1_code
+                    AND c.bc1_code IS NOT NULL
+                )
+            ) AS "bc2MatchedCount"
 
-        FROM courses c
-
-        JOIN training_schools sc
-          ON sc.id = c.school_id
-
-        ${where}
-
-        ORDER BY c.id DESC
-        LIMIT $3 OFFSET $4
-      `,
-      [...params, f.limit, (f.page - 1) * f.limit],
-    );
+          FROM courses c
+          JOIN training_schools sc
+            ON sc.id = c.school_id
+          ${where}
+          ORDER BY c.id DESC
+          LIMIT $3 OFFSET $4
+        `,
+        [...params, f.limit, (f.page - 1) * f.limit],
+      ),
+    ]);
 
     const total = Number(countRows[0]?.total ?? 0);
 

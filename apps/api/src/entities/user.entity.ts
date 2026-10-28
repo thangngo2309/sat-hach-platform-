@@ -14,6 +14,7 @@ import { RefreshToken } from './refresh-token.entity.js';
 export enum UserRole {
   SUPER_ADMIN = 'super_admin',
   ADMIN = 'admin',
+  SYSTEM_ADMIN = 'system_admin',
   USER = 'user',
 }
 
