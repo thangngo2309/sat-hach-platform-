@@ -56,6 +56,7 @@ import {
 
 import type { StudentFormData } from "@/lib/student-management";
 import { API_URL } from "@/lib/auth";
+import { StudentPdfActions } from "@/components/students/StudentPdfActions";
 
 type Bc2Status = "all" | "has_bc2" | "no_bc2";
 
@@ -557,6 +558,12 @@ function StudentTable({
                 </TableCell>
 
                 <TableCell align="right">
+                  {student.sourceType === "manual" && student.intakeUser && (
+                    <StudentPdfActions
+                      studentId={student.id}
+                      intakeUserId={student.intakeUser.id}
+                    />
+                  )}
                   <Stack sx={{ spacing: 0.5, alignItems: "flex-end" }}>
                     <Button
                       size="small"
@@ -1292,6 +1299,19 @@ export default function StudentsPage() {
   const [error, setError] = useState("");
 
   const [selectedId, setSelectedId] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!isSuperAdmin) return;
+
+    const rawId = searchParams.get("studentId");
+    if (!rawId) return;
+
+    const studentId = Number(rawId);
+
+    if (Number.isSafeInteger(studentId) && studentId > 0) {
+      setSelectedId(studentId);
+    }
+  }, [isSuperAdmin, searchParams]);
 
   const [detail, setDetail] = useState<StudentDetail | null>(null);
 

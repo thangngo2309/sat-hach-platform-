@@ -3,6 +3,7 @@ import { API_URL, ApiError } from "@/lib/auth";
 export type StudentDocument = {
   type: string;
   checked: boolean;
+  note?: string;
 };
 
 export type ExistingLicense = {
@@ -45,6 +46,47 @@ export type StudentSaved = {
   sourceType?: string;
 };
 
+export const STUDENT_DOCUMENT_OPTIONS = [
+  {
+    type: "health_certificate",
+    label:
+      "Giấy chứng nhận sức khỏe do cơ sở y tế có thẩm quyền cấp theo quy định",
+  },
+  {
+    type: "driving_experience",
+    label: "Bản khai thời gian và số km lái xe an toàn theo mẫu quy định",
+  },
+  {
+    type: "diploma",
+    label:
+      "Bản sao có chứng thực bằng tốt nghiệp hoặc văn bằng tương đương (nếu cần)",
+  },
+  {
+    type: "current_license_copy",
+    label: "Bản sao chụp giấy phép lái xe hiện có (nếu cần)",
+  },
+  {
+    type: "training_completion_certificate",
+    label: "Giấy xác nhận hoàn thành khóa đào tạo",
+  },
+  {
+    type: "driving_license",
+    label: "Giấy phép lái xe",
+  },
+  {
+    type: "exam_result_summary",
+    label: "Biên bản tổng hợp kết quả sát hạch",
+  },
+  {
+    type: "photo_3x4",
+    label: "Ảnh thẻ 3x4",
+  },
+  {
+    type: "other",
+    label: "Khác",
+  },
+] as const;
+
 export const EMPTY_STUDENT_FORM: StudentFormData = {
   registrationCode: "",
   fullName: "",
@@ -65,12 +107,11 @@ export const EMPTY_STUDENT_FORM: StudentFormData = {
   certificateIssuer: "",
   identityIssuedDate: "",
   note: "",
-  documents: [
-    { type: "health_certificate", checked: false },
-    { type: "driving_experience", checked: false },
-    { type: "diploma", checked: false },
-    { type: "current_license_copy", checked: false },
-  ],
+  documents: STUDENT_DOCUMENT_OPTIONS.map((item) => ({
+    type: item.type,
+    checked: false,
+    note: "",
+  })),
   existingLicenses: [],
 };
 
