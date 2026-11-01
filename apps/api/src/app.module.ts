@@ -61,6 +61,17 @@ import { CsdtReportsService } from './business/csdt-reports/csdt-reports.service
 import { UserManagementController } from './business/users/user-management.controller.js';
 import { UserManagementService } from './business/users/user-management.service.js';
 import { StudentAccessService } from './business/students/student-access.service.js';
+import { OrganizationAccountService } from './business/users/organization-account.service.js';
+import { OrganizationAccountController } from './business/users/organization-account.controller.js';
+import { FileSubmissionsController } from './business/file-submissions/file-submissions.controller.js';
+import { FileSubmissionsService } from './business/file-submissions/file-submissions.service.js';
+import { FileSubmissionImportService } from './business/file-submissions/file-submission-import.service.js';
+import { ReceivedFilesController } from './business/file-submissions/received-files.controller.js';
+import { ReceivedFilesService } from './business/file-submissions/received-files.service.js';
+import { ExamFileApprovalService } from './business/file-submissions/exam-file-approval.service.js';
+import { IndependentExamAssignmentController } from './business/independent-exams/independent-exam-assignment.controller.js';
+import { IndependentExamAssignmentService } from './business/independent-exams/independent-exam-assignment.service.js';
+import { TrainingSchoolImportService } from './business/catalog/training-school-import.service.js';
 
 const businessEntities = [
   User,
@@ -121,7 +132,11 @@ const businessEntities = [
     ExamStatisticsController,
     DashboardController,
     CsdtReportsController,
-    UserManagementController
+    UserManagementController,
+    OrganizationAccountController,
+    FileSubmissionsController,
+    ReceivedFilesController,
+    IndependentExamAssignmentController,
   ],
 
   providers: [
@@ -143,7 +158,14 @@ const businessEntities = [
     DashboardService,
     CsdtReportsService,
     UserManagementService,
-    StudentAccessService
+    StudentAccessService,
+    OrganizationAccountService,
+    FileSubmissionsService,
+    FileSubmissionImportService,
+    ReceivedFilesService,
+    ExamFileApprovalService,
+    IndependentExamAssignmentService,
+    TrainingSchoolImportService
   ],
 })
 export class AppModule {}

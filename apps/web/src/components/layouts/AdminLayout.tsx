@@ -27,6 +27,7 @@ import {
 
 import {
   AssessmentOutlined,
+  AssignmentOutlined,
   DashboardOutlined,
   DescriptionOutlined,
   DirectionsCarOutlined,
@@ -122,9 +123,41 @@ const systemItems: MenuEntry[] = [
     icon: PeopleOutlineOutlined,
     superAdminOnly: true,
   },
+  {
+    label: "Phê duyệt hồ sơ",
+    href: "/file-approvals",
+    icon: DriveFolderUploadOutlined,
+    superAdminOnly: true,
+  },
+  {
+    label: "Phân công thí sinh tự do",
+    href: "/independent-assignments",
+    icon: AssignmentOutlined,
+    superAdminOnly: true,
+  },
 ];
 
-const allItems = [...mainItems, ...importItems, ...systemItems];
+const businessWorkspaceItems: MenuEntry[] = [
+  {
+    label: "Không gian làm việc",
+    href: "/role-workspace",
+    icon: DescriptionOutlined,
+  },
+];
+
+const BUSINESS_ROLES = [
+  "training_school",
+  "pc08_staff",
+  "exam_center",
+  "exam_secretary",
+] as const;
+
+const allItems = [
+  ...mainItems,
+  ...importItems,
+  ...systemItems,
+  ...businessWorkspaceItems,
+];
 
 function isRouteSelected(pathname: string, href: string) {
   return pathname === href;
@@ -148,13 +181,19 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
   const isSuperAdmin = user?.role === "super_admin";
   const isSystemAdmin = user?.role === "system_admin";
 
+  const isBusinessAccount = BUSINESS_ROLES.some((role) => role === user?.role);
+
+  const isRestrictedAccount = isSystemAdmin || isBusinessAccount;
+
   const drawerWidth = collapsed ? COLLAPSED_WIDTH : DRAWER_WIDTH;
 
-  const visibleMainItems = isSystemAdmin
+  const visibleMainItems = isBusinessAccount
+    ? businessWorkspaceItems
+    : isSystemAdmin
     ? mainItems.filter((item) => item.href === "/students")
     : mainItems;
 
-  const visibleImportItems = isSystemAdmin ? [] : importItems;
+  const visibleImportItems = isRestrictedAccount ? [] : importItems;
 
   const visibleSystemItems = isSuperAdmin ? systemItems : [];
 
@@ -170,17 +209,55 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
     }
   }, [loading, user, router]);
 
-  useEffect(() => {
-    if (!loading && isSystemAdmin && pathname !== "/students") {
-      router.replace("/students");
-    }
-  }, [loading, isSystemAdmin, pathname, router]);
+  // useEffect(() => {
+  //   if (!loading && isSystemAdmin && pathname !== "/students") {
+  //     router.replace("/students");
+  //   }
+  // }, [loading, isSystemAdmin, pathname, router]);
 
   useEffect(() => {
-    if (!loading && user && pathname === "/users" && !isSuperAdmin) {
-      router.replace(isSystemAdmin ? "/students" : "/dashboard");
+    if (loading || !user) return;
+
+    // Các tài khoản nghiệp vụ mới chỉ được
+    // vào không gian làm việc ở Giai đoạn 1.
+    if (isBusinessAccount) {
+      if (pathname !== "/role-workspace") {
+        router.replace("/role-workspace");
+      }
+
+      return;
     }
-  }, [loading, user, pathname, isSuperAdmin, isSystemAdmin, router]);
+
+    // SYSTEM_ADMIN giữ nguyên quyền truy cập
+    // duy nhất vào trang Học viên.
+    if (isSystemAdmin) {
+      if (pathname !== "/students") {
+        router.replace("/students");
+      }
+
+      return;
+    }
+
+    // Tài khoản quản trị cũ không được vào
+    // workspace dành riêng cho các role mới.
+    if (pathname === "/role-workspace") {
+      router.replace("/dashboard");
+      return;
+    }
+
+    // Chỉ SUPER_ADMIN được quản lý tài khoản.
+    if (pathname === "/users" && !isSuperAdmin) {
+      router.replace("/dashboard");
+    }
+  }, [
+    loading,
+    user,
+    pathname,
+    isBusinessAccount,
+    isSystemAdmin,
+    isSuperAdmin,
+    router,
+  ]);
 
   useEffect(() => {
     setMobileOpen(false);
@@ -385,7 +462,7 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
           {visibleMainItems.map((item) => renderEntry(item, compact))}
         </List>
 
-        {!isSystemAdmin && (
+        {!isRestrictedAccount && (
           <>
             {renderSectionTitle("DỮ LIỆU XML", compact)}
 
@@ -528,6 +605,8 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
 
   if (
     (isSystemAdmin && pathname !== "/students") ||
+    (isBusinessAccount && pathname !== "/role-workspace") ||
+    (!isBusinessAccount && !isSystemAdmin && pathname === "/role-workspace") ||
     (pathname === "/users" && !isSuperAdmin)
   ) {
     return (

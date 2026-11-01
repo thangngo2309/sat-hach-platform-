@@ -39,10 +39,12 @@ export class Bc1ImportService {
     const { document, hash } = this.validateFile(file);
 
     const existing = await this.dataSource.query(
-      `SELECT id, imported_at
-         FROM import_batches
-         WHERE file_sha256 = $1
-         LIMIT 1`,
+      `
+        SELECT id, imported_at
+        FROM import_batches
+        WHERE file_sha256 = $1
+        LIMIT 1
+      `,
       [hash],
     );
 
@@ -65,24 +67,31 @@ export class Bc1ImportService {
 
   async confirm(file: Express.Multer.File | undefined, userId: number) {
     const { document, hash } = this.validateFile(file);
+
     const photos = extractStudentPhotoMap(file!.buffer, 'BAO_CAO1');
 
     return this.dataSource.transaction(async (manager) => {
-      // PostgreSQL unique constraint is the final safeguard
-      // against importing identical content concurrently.
       const batchRows = await manager.query(
-        `INSERT INTO import_batches (
-            type, file_name, file_sha256, file_size,
-            report_code, source_transaction_code,
-            school_code, course_code,
-            total_records, imported_by
+        `
+          INSERT INTO import_batches (
+            type,
+            file_name,
+            file_sha256,
+            file_size,
+            report_code,
+            source_transaction_code,
+            school_code,
+            course_code,
+            total_records,
+            imported_by
           )
           VALUES (
-            'BC1', $1, $2, $3,
-            $4, $5, $6, $7, $8, $9
+            'BC1', $1, $2, $3, $4,
+            $5, $6, $7, $8, $9
           )
           ON CONFLICT (file_sha256) DO NOTHING
-          RETURNING id`,
+          RETURNING id
+        `,
         [
           file!.originalname,
           hash,
@@ -102,23 +111,61 @@ export class Bc1ImportService {
 
       const batchId = Number(batchRows[0].id);
 
+      /**
+       * Tạo CSĐT khi mã chưa tồn tại.
+       *
+       * Nếu đã có CSĐT từ Excel hoặc do Admin
+       * nhập/chỉnh sửa thủ công, không ghi đè
+       * tên, tỉnh/thành và các thông tin quản trị.
+       *
+       * Vẫn RETURNING id để tiếp tục nhập khóa học,
+       * học viên và ghi danh bình thường.
+       */
       const schoolRows = await manager.query(
-        `INSERT INTO training_schools (
-            code, name, province_code, province_name
+        `
+          INSERT INTO training_schools (
+            code,
+            name,
+            province_code,
+            province_name,
+            info_source
           )
-          VALUES ($1, $2, $3, $4)
+          VALUES ($1, $2, $3, $4, 'xml')
+
           ON CONFLICT (code) DO UPDATE SET
-            name = EXCLUDED.name,
-            province_code = COALESCE(
-              EXCLUDED.province_code,
-              training_schools.province_code
-            ),
-            province_name = COALESCE(
-              EXCLUDED.province_name,
-              training_schools.province_name
-            ),
-            updated_at = NOW()
-          RETURNING id`,
+
+            name = CASE
+              WHEN training_schools.info_source = 'xml'
+                THEN EXCLUDED.name
+              ELSE training_schools.name
+            END,
+
+            province_code = CASE
+              WHEN training_schools.info_source = 'xml'
+                THEN COALESCE(
+                  EXCLUDED.province_code,
+                  training_schools.province_code
+                )
+              ELSE training_schools.province_code
+            END,
+
+            province_name = CASE
+              WHEN training_schools.info_source = 'xml'
+                THEN COALESCE(
+                  EXCLUDED.province_name,
+                  training_schools.province_name
+                )
+              ELSE training_schools.province_name
+            END,
+
+            updated_at = CASE
+              WHEN training_schools.info_source = 'xml'
+                THEN NOW()
+              ELSE training_schools.updated_at
+            END
+
+          RETURNING id
+        `,
         [
           document.school.code,
           document.school.name,
@@ -127,19 +174,26 @@ export class Bc1ImportService {
         ],
       );
 
-      const schoolId = schoolRows[0].id;
+      const schoolId = Number(schoolRows[0].id);
 
       const courseRows = await manager.query(
-        `INSERT INTO courses (
-            school_id, code, name, bc1_code,
-            license_class, training_class,
-            opening_date, closing_date,
+        `
+          INSERT INTO courses (
+            school_id,
+            code,
+            name,
+            bc1_code,
+            license_class,
+            training_class,
+            opening_date,
+            closing_date,
             declared_student_count
           )
           VALUES (
             $1, $2, $3, $4, $5,
             $6, $7, $8, $9
           )
+
           ON CONFLICT (school_id, code) DO UPDATE SET
             name = EXCLUDED.name,
             bc1_code = COALESCE(
@@ -162,9 +216,12 @@ export class Bc1ImportService {
               EXCLUDED.closing_date,
               courses.closing_date
             ),
-            declared_student_count = EXCLUDED.declared_student_count,
+            declared_student_count =
+              EXCLUDED.declared_student_count,
             updated_at = NOW()
-          RETURNING id`,
+
+          RETURNING id
+        `,
         [
           schoolId,
           document.course.code,
@@ -178,7 +235,7 @@ export class Bc1ImportService {
         ],
       );
 
-      const courseId = courseRows[0].id;
+      const courseId = Number(courseRows[0].id);
 
       let newStudents = 0;
       let newEnrollments = 0;
@@ -186,20 +243,27 @@ export class Bc1ImportService {
 
       for (const student of document.students) {
         const insertedStudents = await manager.query(
-          `INSERT INTO students (
-              registration_code, full_name,
-              family_name, given_name,
-              date_of_birth, gender,
+          `
+            INSERT INTO students (
+              registration_code,
+              full_name,
+              family_name,
+              given_name,
+              date_of_birth,
+              gender,
               identity_number,
-              nationality_code, nationality_name,
-              permanent_address, current_address
+              nationality_code,
+              nationality_name,
+              permanent_address,
+              current_address
             )
             VALUES (
               $1, $2, $3, $4, $5, $6,
               $7, $8, $9, $10, $11
             )
             ON CONFLICT (registration_code) DO NOTHING
-            RETURNING id`,
+            RETURNING id
+          `,
           [
             student.registrationCode,
             student.fullName,
@@ -222,15 +286,17 @@ export class Bc1ImportService {
           newStudents++;
         } else {
           const existingStudents = await manager.query(
-            `SELECT id
-               FROM students
-               WHERE registration_code = $1`,
+            `
+              SELECT id
+              FROM students
+              WHERE registration_code = $1
+            `,
             [student.registrationCode],
           );
 
           if (!existingStudents.length) {
             throw new ConflictException(
-              `Không tìm thấy hồ sơ học viên ${student.registrationCode}.`,
+              `Không tìm thấy hồ sơ học viên ` + `${student.registrationCode}.`,
             );
           }
 
@@ -249,13 +315,18 @@ export class Bc1ImportService {
         }
 
         const enrollmentRows = await manager.query(
-          `INSERT INTO enrollments (
-              course_id, student_id, file_number,
-              source_order, source_import_id
+          `
+            INSERT INTO enrollments (
+              course_id,
+              student_id,
+              file_number,
+              source_order,
+              source_import_id
             )
             VALUES ($1, $2, $3, $4, $5)
             ON CONFLICT (course_id, student_id) DO NOTHING
-            RETURNING id`,
+            RETURNING id
+          `,
           [courseId, studentId, student.fileNumber, student.order, batchId],
         );
 
@@ -267,11 +338,13 @@ export class Bc1ImportService {
       }
 
       await manager.query(
-        `UPDATE import_batches SET
-             new_students = $2,
-             new_enrollments = $3,
-             skipped_enrollments = $4
-           WHERE id = $1`,
+        `
+          UPDATE import_batches
+          SET new_students = $2,
+              new_enrollments = $3,
+              skipped_enrollments = $4
+          WHERE id = $1
+        `,
         [batchId, newStudents, newEnrollments, skippedEnrollments],
       );
 
@@ -293,7 +366,8 @@ export class Bc1ImportService {
     const safeLimit = Math.min(Math.max(Math.trunc(limit) || 50, 1), 100);
 
     return this.dataSource.query(
-      `SELECT
+      `
+        SELECT
           b.id,
           b.type,
           b.file_name AS "fileName",
@@ -311,7 +385,8 @@ export class Bc1ImportService {
         LEFT JOIN users u ON u.id = b.imported_by
         WHERE b.type = 'BC1'
         ORDER BY b.imported_at DESC, b.id DESC
-        LIMIT $1`,
+        LIMIT $1
+      `,
       [safeLimit],
     );
   }

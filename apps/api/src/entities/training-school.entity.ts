@@ -10,6 +10,12 @@ import {
 
 import { Course } from './course.entity.js';
 
+export enum TrainingSchoolInfoSource {
+  XML = 'xml',
+  MANUAL = 'manual',
+  EXCEL = 'excel',
+}
+
 @Entity('training_schools')
 export class TrainingSchool {
   @PrimaryGeneratedColumn()
@@ -36,6 +42,27 @@ export class TrainingSchool {
     nullable: true,
   })
   provinceName!: string | null;
+
+  @Column({
+    type: 'text',
+    nullable: true,
+  })
+  address!: string | null;
+
+  @Column({
+    name: 'is_active',
+    type: 'boolean',
+    default: true,
+  })
+  isActive!: boolean;
+
+  @Column({
+    name: 'info_source',
+    type: 'varchar',
+    length: 20,
+    default: TrainingSchoolInfoSource.XML,
+  })
+  infoSource!: TrainingSchoolInfoSource;
 
   @OneToMany(() => Course, (course) => course.school)
   courses!: Relation<Course[]>;

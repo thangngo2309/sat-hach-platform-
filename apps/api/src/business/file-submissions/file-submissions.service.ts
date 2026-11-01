@@ -1,0 +1,1004 @@
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { InjectDataSource } from '@nestjs/typeorm';
+import { createHash, randomUUID } from 'node:crypto';
+import { createReadStream } from 'node:fs';
+import { copyFile, mkdir, open, rename, stat, unlink } from 'node:fs/promises';
+import { basename, extname, join, resolve } from 'node:path';
+import { DataSource, type EntityManager } from 'typeorm';
+
+import { UserRole } from '../../entities/user.entity.js';
+import type { AuthUser } from '../../shared/types/auth-user.type.js';
+
+export const FILE_TYPES = [
+  'bc1',
+  'bc2',
+  'bc2_result',
+  'exam_48',
+  'exam_result',
+] as const;
+
+export type FileType = (typeof FILE_TYPES)[number];
+
+export type SubmissionStatus = 'pending' | 'approved' | 'rejected';
+
+type UploadInput = {
+  fileType: string;
+  trainingSchoolId?: string;
+  examinationCenterId?: string;
+  note?: string;
+};
+
+type SubmissionRow = {
+  id: number;
+  fileType: FileType;
+  status: SubmissionStatus;
+  uploadedByUserId: number;
+  uploaderName: string;
+  trainingSchoolId: number | null;
+  trainingSchoolName: string | null;
+  examinationCenterId: number | null;
+  examinationCenterName: string | null;
+  note: string | null;
+  rejectionReason: string | null;
+  currentVersion: number;
+  importStatus: string;
+  originalName: string;
+  sizeBytes: string;
+  createdAt: Date;
+  updatedAt: Date;
+  reviewedAt: Date | null;
+};
+
+type VersionRow = {
+  id: number;
+  submissionId: number;
+  version: number;
+  originalName: string;
+  storageKey: string;
+  mimeType: string;
+  sizeBytes: string;
+  sha256: string;
+  createdAt: Date;
+};
+
+type AssignmentRow = {
+  trainingSchoolId: number | null;
+  examinationCenterId: number | null;
+};
+
+type StoredFile = {
+  storageKey: string;
+  absolutePath: string;
+  sha256: string;
+  sizeBytes: number;
+  originalName: string;
+  mimeType: string;
+};
+
+const ALLOWED_ROLES: Partial<Record<UserRole, FileType[]>> = {
+  [UserRole.TRAINING_SCHOOL]: ['bc1', 'bc2'],
+  [UserRole.PC08_STAFF]: ['bc2_result', 'exam_48'],
+  [UserRole.EXAM_CENTER]: ['exam_result'],
+};
+
+const ALLOWED_EXTENSIONS = new Set(['.xml', '.xlsx', '.xls', '.pdf']);
+
+const STORAGE_ROOT = resolve(
+  process.env.FILE_STORAGE_DIR || join(process.cwd(), 'storage', 'submissions'),
+);
+
+export function getFileUploadMaxBytes(): number {
+  const configured = Number(process.env.FILE_UPLOAD_MAX_MB ?? 500);
+
+  if (!Number.isFinite(configured) || configured <= 0 || configured > 2048) {
+    throw new Error(
+      'FILE_UPLOAD_MAX_MB phải lớn hơn 0 và không vượt quá 2048.',
+    );
+  }
+
+  return Math.floor(configured * 1024 * 1024);
+}
+
+function parsePositiveId(value: unknown, name: string): number {
+  const parsed =
+    typeof value === 'number'
+      ? value
+      : typeof value === 'string' && /^[1-9]\d*$/.test(value)
+        ? Number(value)
+        : NaN;
+
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new BadRequestException(`${name} không hợp lệ.`);
+  }
+
+  return parsed;
+}
+
+function optionalId(value: unknown, name: string): number | null {
+  if (value === undefined || value === null || value === '') {
+    return null;
+  }
+
+  return parsePositiveId(value, name);
+}
+
+function getOriginalName(file: Express.Multer.File): string {
+  const name = basename((file.originalname || 'upload').replace(/\\/g, '/'))
+    .replace(/[\x00-\x1F\x7F]/g, '_')
+    .trim();
+
+  return name.slice(0, 255) || 'upload';
+}
+
+/**
+ * Đọc một đoạn nhỏ ở đầu file.
+ * Không đưa toàn bộ XML / Excel / PDF vào RAM.
+ */
+async function readHeader(path: string, length = 8192): Promise<Buffer> {
+  const handle = await open(path, 'r');
+
+  try {
+    const buffer = Buffer.alloc(length);
+    const result = await handle.read(buffer, 0, length, 0);
+
+    return buffer.subarray(0, result.bytesRead);
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
+ * Kiểm tra định dạng ở mức chữ ký file.
+ *
+ * Đây không phải parser XML hoặc kiểm tra
+ * toàn bộ cấu trúc báo cáo. Việc đó được
+ * thực hiện ở các service import sau duyệt.
+ */
+async function validateDiskFile(
+  file: Express.Multer.File | undefined,
+): Promise<{
+  file: Express.Multer.File;
+  originalName: string;
+  extension: string;
+  sizeBytes: number;
+}> {
+  if (!file?.path) {
+    throw new BadRequestException('Vui lòng chọn file cần tải lên.');
+  }
+
+  const info = await stat(file.path);
+
+  if (!info.isFile() || info.size <= 0) {
+    throw new BadRequestException('File rỗng hoặc không hợp lệ.');
+  }
+
+  if (info.size > getFileUploadMaxBytes()) {
+    throw new BadRequestException('File vượt quá dung lượng cho phép.');
+  }
+
+  const originalName = getOriginalName(file);
+  const extension = extname(originalName).toLowerCase();
+
+  if (!ALLOWED_EXTENSIONS.has(extension)) {
+    throw new BadRequestException('Chỉ hỗ trợ XML, XLS, XLSX và PDF.');
+  }
+
+  const header = await readHeader(file.path);
+
+  if (extension === '.pdf') {
+    if (header.subarray(0, 5).toString('ascii') !== '%PDF-') {
+      throw new BadRequestException('Nội dung không phải file PDF hợp lệ.');
+    }
+  }
+
+  if (extension === '.xlsx') {
+    const isZip =
+      header[0] === 0x50 &&
+      header[1] === 0x4b &&
+      [0x03, 0x05, 0x07].includes(header[2]);
+
+    if (!isZip) {
+      throw new BadRequestException('File XLSX không có định dạng ZIP hợp lệ.');
+    }
+  }
+
+  if (extension === '.xls') {
+    const oleSignature = Buffer.from('D0CF11E0A1B11AE1', 'hex');
+
+    if (!header.subarray(0, 8).equals(oleSignature)) {
+      throw new BadRequestException('File XLS không đúng định dạng.');
+    }
+  }
+
+  if (extension === '.xml') {
+    const utf8Bom = header
+      .subarray(0, 3)
+      .equals(Buffer.from([0xef, 0xbb, 0xbf]));
+
+    const isUtf16Le = header[0] === 0xff && header[1] === 0xfe;
+
+    const isUtf16Be = header[0] === 0xfe && header[1] === 0xff;
+
+    let start: string;
+
+    if (isUtf16Le) {
+      start = header.subarray(2).toString('utf16le');
+    } else if (isUtf16Be) {
+      const payload = header.subarray(2);
+      const swapped = Buffer.from(payload);
+
+      for (let index = 0; index + 1 < swapped.length; index += 2) {
+        const byte = swapped[index];
+        swapped[index] = swapped[index + 1];
+        swapped[index + 1] = byte;
+      }
+
+      start = swapped.toString('utf16le');
+    } else {
+      start = header.subarray(utf8Bom ? 3 : 0).toString('utf8');
+    }
+
+    start = start.replace(/^\uFEFF/, '').trimStart();
+
+    if (!start.startsWith('<')) {
+      throw new BadRequestException(
+        'File XML không có cấu trúc mở đầu hợp lệ.',
+      );
+    }
+  }
+
+  return {
+    file,
+    originalName,
+    extension,
+    sizeBytes: info.size,
+  };
+}
+
+/**
+ * SHA-256 tính theo stream, sử dụng bộ đệm
+ * của Node.js thay vì đọc toàn bộ file.
+ */
+async function hashFile(path: string): Promise<string> {
+  const hash = createHash('sha256');
+
+  for await (const chunk of createReadStream(path)) {
+    hash.update(chunk);
+  }
+
+  return hash.digest('hex');
+}
+
+/**
+ * Temp và kho chính nằm trên cùng volume
+ * thì rename gần như tức thời.
+ *
+ * Nếu ở hai filesystem khác nhau, fallback
+ * copyFile rồi xóa file tạm.
+ */
+async function moveFile(source: string, destination: string): Promise<void> {
+  try {
+    await rename(source, destination);
+  } catch (error) {
+    const code =
+      error instanceof Error && 'code' in error ? String(error.code) : '';
+
+    if (code !== 'EXDEV') {
+      throw error;
+    }
+
+    try {
+      await copyFile(source, destination);
+      await unlink(source);
+    } catch (copyError) {
+      await unlink(destination).catch(() => undefined);
+      throw copyError;
+    }
+  }
+}
+
+@Injectable()
+export class FileSubmissionsService {
+  constructor(
+    @InjectDataSource()
+    private readonly db: DataSource,
+  ) {}
+
+  private ensureUploader(user: AuthUser, type: FileType) {
+    if (!ALLOWED_ROLES[user.role]?.includes(type)) {
+      throw new ForbiddenException(
+        'Tài khoản không có quyền gửi loại file này.',
+      );
+    }
+  }
+
+  private async getAssignment(userId: number): Promise<AssignmentRow> {
+    const rows: AssignmentRow[] = await this.db.query(
+      `
+          SELECT
+            training_school_id AS "trainingSchoolId",
+            examination_center_id AS "examinationCenterId"
+          FROM user_organization_assignments
+          WHERE user_id = $1
+          LIMIT 1
+        `,
+      [userId],
+    );
+
+    return (
+      rows[0] ?? {
+        trainingSchoolId: null,
+        examinationCenterId: null,
+      }
+    );
+  }
+
+  async options(user: AuthUser) {
+    if (
+      user.role !== UserRole.SUPER_ADMIN &&
+      user.role !== UserRole.PC08_STAFF
+    ) {
+      throw new ForbiddenException('Không được truy cập danh mục đơn vị.');
+    }
+
+    const [trainingSchools, examinationCenters] = await Promise.all([
+      this.db.query(`
+        SELECT id, code, name
+        FROM training_schools
+        ORDER BY name ASC, id ASC
+      `),
+      this.db.query(`
+        SELECT id, code, name
+        FROM examination_centers
+        WHERE is_active = TRUE
+        ORDER BY name ASC NULLS LAST, id ASC
+      `),
+    ]);
+
+    return {
+      trainingSchools,
+      examinationCenters,
+    };
+  }
+
+  private async validateScope(
+    user: AuthUser,
+    type: FileType,
+    input: UploadInput,
+  ): Promise<{
+    schoolId: number | null;
+    centerId: number | null;
+  }> {
+    this.ensureUploader(user, type);
+
+    const assignment = await this.getAssignment(user.sub);
+
+    let schoolId: number | null = null;
+    let centerId: number | null = null;
+
+    if (user.role === UserRole.TRAINING_SCHOOL) {
+      schoolId = assignment.trainingSchoolId;
+
+      if (!schoolId) {
+        throw new BadRequestException('Tài khoản chưa được gắn CSĐT.');
+      }
+    }
+
+    if (user.role === UserRole.EXAM_CENTER) {
+      centerId = assignment.examinationCenterId;
+
+      if (!centerId) {
+        throw new BadRequestException('Tài khoản chưa được gắn TTSH.');
+      }
+    }
+
+    if (user.role === UserRole.PC08_STAFF) {
+      if (type === 'bc2_result') {
+        schoolId = optionalId(input.trainingSchoolId, 'Cơ sở đào tạo');
+
+        if (!schoolId) {
+          throw new BadRequestException('Vui lòng chọn CSĐT nhận kết quả BC2.');
+        }
+      } else {
+        centerId = optionalId(input.examinationCenterId, 'Trung tâm sát hạch');
+
+        if (!centerId) {
+          throw new BadRequestException('Vui lòng chọn TTSH nhận file 48_.');
+        }
+      }
+    }
+
+    if (schoolId !== null) {
+      const school: Array<{ id: number }> = await this.db.query(
+        `
+            SELECT id
+            FROM training_schools
+            WHERE id = $1
+          `,
+        [schoolId],
+      );
+
+      if (!school.length) {
+        throw new BadRequestException('CSĐT không tồn tại.');
+      }
+    }
+
+    if (centerId !== null) {
+      const center: Array<{ id: number }> = await this.db.query(
+        `
+            SELECT id
+            FROM examination_centers
+            WHERE id = $1
+              AND is_active = TRUE
+          `,
+        [centerId],
+      );
+
+      if (!center.length) {
+        throw new BadRequestException(
+          'TTSH không tồn tại hoặc đã ngừng hoạt động.',
+        );
+      }
+    }
+
+    return { schoolId, centerId };
+  }
+
+  /**
+   * Chuẩn hóa một file Multer đã được lưu tạm
+   * thành file trong kho chính.
+   */
+  private async prepareStoredFile(
+    file: Express.Multer.File,
+  ): Promise<StoredFile> {
+    const validated = await validateDiskFile(file);
+
+    await mkdir(STORAGE_ROOT, {
+      recursive: true,
+    });
+
+    const sha256 = await hashFile(file.path);
+
+    const storageKey = `${randomUUID()}${validated.extension}`;
+
+    const absolutePath = join(STORAGE_ROOT, storageKey);
+
+    await moveFile(file.path, absolutePath);
+
+    return {
+      storageKey,
+      absolutePath,
+      sha256,
+      sizeBytes: validated.sizeBytes,
+      originalName: validated.originalName,
+      mimeType: file.mimetype || 'application/octet-stream',
+    };
+  }
+
+  private async addEvent(
+    manager: EntityManager,
+    submissionId: number,
+    actorId: number,
+    action: string,
+    detail: Record<string, unknown> = {},
+  ): Promise<void> {
+    await manager.query(
+      `
+        INSERT INTO file_submission_events (
+          submission_id,
+          actor_user_id,
+          action,
+          detail
+        )
+        VALUES ($1, $2, $3, $4::jsonb)
+      `,
+      [submissionId, actorId, action, JSON.stringify(detail)],
+    );
+  }
+
+  private readonly baseQuery = `
+    SELECT
+      s.id,
+      s.file_type AS "fileType",
+      s.status,
+      s.uploaded_by_user_id AS "uploadedByUserId",
+      u.full_name AS "uploaderName",
+      s.training_school_id AS "trainingSchoolId",
+      ts.name AS "trainingSchoolName",
+      s.examination_center_id AS "examinationCenterId",
+      ec.name AS "examinationCenterName",
+      s.note,
+      s.rejection_reason AS "rejectionReason",
+      s.current_version AS "currentVersion",
+      s.import_status AS "importStatus",
+      v.original_name AS "originalName",
+      v.size_bytes::text AS "sizeBytes",
+      s.created_at AS "createdAt",
+      s.updated_at AS "updatedAt",
+      s.reviewed_at AS "reviewedAt"
+
+    FROM file_submissions s
+
+    JOIN users u
+      ON u.id = s.uploaded_by_user_id
+
+    LEFT JOIN training_schools ts
+      ON ts.id = s.training_school_id
+
+    LEFT JOIN examination_centers ec
+      ON ec.id = s.examination_center_id
+
+    JOIN file_submission_versions v
+      ON v.submission_id = s.id
+     AND v.version = s.current_version
+  `;
+
+  private async findOne(id: number): Promise<SubmissionRow> {
+    const rows: SubmissionRow[] = await this.db.query(
+      `
+          ${this.baseQuery}
+          WHERE s.id = $1
+          LIMIT 1
+        `,
+      [id],
+    );
+
+    if (!rows.length) {
+      throw new NotFoundException('Không tìm thấy hồ sơ.');
+    }
+
+    return rows[0];
+  }
+
+  private ensureVisible(user: AuthUser, submission: SubmissionRow): void {
+    if (user.role === UserRole.SUPER_ADMIN) {
+      return;
+    }
+
+    if (submission.uploadedByUserId !== user.sub) {
+      throw new ForbiddenException('Không có quyền truy cập hồ sơ này.');
+    }
+  }
+
+  async list(user: AuthUser, status?: string): Promise<SubmissionRow[]> {
+    const isSuperAdmin = user.role === UserRole.SUPER_ADMIN;
+
+    if (!isSuperAdmin && !ALLOWED_ROLES[user.role]) {
+      throw new ForbiddenException('Không có quyền xem hồ sơ.');
+    }
+
+    if (status && !['pending', 'approved', 'rejected'].includes(status)) {
+      throw new BadRequestException('Trạng thái không hợp lệ.');
+    }
+
+    return this.db.query(
+      `
+        ${this.baseQuery}
+
+        WHERE (
+          $1::boolean = TRUE
+          OR s.uploaded_by_user_id = $2
+        )
+        AND (
+          $3::text IS NULL
+          OR s.status = $3::text
+        )
+
+        ORDER BY
+          s.created_at DESC,
+          s.id DESC
+
+        LIMIT 500
+      `,
+      [isSuperAdmin, user.sub, status || null],
+    );
+  }
+
+  async create(
+    user: AuthUser,
+    input: UploadInput,
+    uploadedFile?: Express.Multer.File,
+  ): Promise<SubmissionRow> {
+    let stored: StoredFile | null = null;
+
+    try {
+      const type = input?.fileType as FileType;
+
+      if (!FILE_TYPES.includes(type)) {
+        throw new BadRequestException('Loại file không hợp lệ.');
+      }
+
+      if (!uploadedFile?.path) {
+        throw new BadRequestException('Vui lòng chọn file.');
+      }
+
+      const scope = await this.validateScope(user, type, input);
+
+      const note = input.note?.trim().slice(0, 2000) || null;
+
+      stored = await this.prepareStoredFile(uploadedFile);
+
+      const result = await this.db.transaction(async (manager) => {
+        const created: Array<{ id: number }> = await manager.query(
+          `
+                INSERT INTO file_submissions (
+                  file_type,
+                  uploaded_by_user_id,
+                  training_school_id,
+                  examination_center_id,
+                  note
+                )
+                VALUES ($1, $2, $3, $4, $5)
+                RETURNING id
+              `,
+          [type, user.sub, scope.schoolId, scope.centerId, note],
+        );
+
+        const submissionId = created[0].id;
+
+        await manager.query(
+          `
+              INSERT INTO file_submission_versions (
+                submission_id,
+                version,
+                original_name,
+                storage_key,
+                mime_type,
+                size_bytes,
+                sha256,
+                uploaded_by_user_id
+              )
+              VALUES (
+                $1, 1, $2, $3, $4, $5, $6, $7
+              )
+            `,
+          [
+            submissionId,
+            stored!.originalName,
+            stored!.storageKey,
+            stored!.mimeType,
+            stored!.sizeBytes,
+            stored!.sha256,
+            user.sub,
+          ],
+        );
+
+        await this.addEvent(manager, submissionId, user.sub, 'created', {
+          fileType: type,
+          filename: stored!.originalName,
+        });
+
+        return submissionId;
+      });
+
+      // Đã commit thành công: không xóa file
+      // ngay cả khi truy vấn trả kết quả lỗi.
+      stored = null;
+
+      return this.findOne(result);
+    } finally {
+      if (uploadedFile?.path) {
+        await unlink(uploadedFile.path).catch(() => undefined);
+      }
+
+      if (stored) {
+        await unlink(stored.absolutePath).catch(() => undefined);
+      }
+    }
+  }
+
+  async replace(
+    user: AuthUser,
+    id: number,
+    uploadedFile?: Express.Multer.File,
+  ): Promise<SubmissionRow> {
+    let stored: StoredFile | null = null;
+
+    try {
+      if (!uploadedFile?.path) {
+        throw new BadRequestException('Vui lòng chọn file.');
+      }
+
+      const submission = await this.findOne(id);
+
+      if (submission.uploadedByUserId !== user.sub) {
+        throw new ForbiddenException(
+          'Không được thay file của tài khoản khác.',
+        );
+      }
+
+      if (submission.status !== 'pending') {
+        throw new ConflictException('Chỉ được thay file khi chưa được duyệt.');
+      }
+
+      stored = await this.prepareStoredFile(uploadedFile);
+
+      await this.db.transaction(async (manager) => {
+        const locked: Array<{
+          status: SubmissionStatus;
+          current_version: number;
+          uploaded_by_user_id: number;
+        }> = await manager.query(
+          `
+              SELECT
+                status,
+                current_version,
+                uploaded_by_user_id
+              FROM file_submissions
+              WHERE id = $1
+              FOR UPDATE
+            `,
+          [id],
+        );
+
+        if (
+          !locked.length ||
+          locked[0].status !== 'pending' ||
+          Number(locked[0].uploaded_by_user_id) !== user.sub
+        ) {
+          throw new ConflictException(
+            'Hồ sơ đã được xử lý, không thể thay file.',
+          );
+        }
+
+        const nextVersion = Number(locked[0].current_version) + 1;
+
+        await manager.query(
+          `
+              INSERT INTO file_submission_versions (
+                submission_id,
+                version,
+                original_name,
+                storage_key,
+                mime_type,
+                size_bytes,
+                sha256,
+                uploaded_by_user_id
+              )
+              VALUES (
+                $1, $2, $3, $4, $5, $6, $7, $8
+              )
+            `,
+          [
+            id,
+            nextVersion,
+            stored!.originalName,
+            stored!.storageKey,
+            stored!.mimeType,
+            stored!.sizeBytes,
+            stored!.sha256,
+            user.sub,
+          ],
+        );
+
+        await manager.query(
+          `
+            UPDATE file_submissions
+            SET current_version = $2,
+                import_status = 'not_processed',
+                import_error = NULL,
+                import_result = NULL,
+                import_batch_id = NULL,
+                import_completed_at = NULL,
+                updated_at = NOW()
+            WHERE id = $1
+            `,
+          [id, nextVersion],
+        );
+
+        await this.addEvent(manager, id, user.sub, 'version_uploaded', {
+          version: nextVersion,
+          filename: stored!.originalName,
+        });
+      });
+
+      stored = null;
+
+      return this.findOne(id);
+    } finally {
+      if (uploadedFile?.path) {
+        await unlink(uploadedFile.path).catch(() => undefined);
+      }
+
+      if (stored) {
+        await unlink(stored.absolutePath).catch(() => undefined);
+      }
+    }
+  }
+
+  async review(
+    user: AuthUser,
+    id: number,
+    action: 'approve' | 'reject',
+    reason?: string,
+  ): Promise<SubmissionRow> {
+    if (user.role !== UserRole.SUPER_ADMIN) {
+      throw new ForbiddenException();
+    }
+
+    if (action !== 'approve' && action !== 'reject') {
+      throw new BadRequestException('Thao tác phê duyệt không hợp lệ.');
+    }
+
+    const cleanedReason = reason?.trim().slice(0, 2000) || null;
+
+    if (action === 'reject' && !cleanedReason) {
+      throw new BadRequestException('Phải nhập lý do từ chối.');
+    }
+
+    await this.db.transaction(async (manager) => {
+      const locked: Array<{
+        status: SubmissionStatus;
+      }> = await manager.query(
+        `
+          SELECT status
+          FROM file_submissions
+          WHERE id = $1
+          FOR UPDATE
+        `,
+        [id],
+      );
+
+      if (!locked.length) {
+        throw new NotFoundException('Không tìm thấy hồ sơ.');
+      }
+
+      if (locked[0].status !== 'pending') {
+        throw new ConflictException('Hồ sơ đã được xử lý trước đó.');
+      }
+
+      const status = action === 'approve' ? 'approved' : 'rejected';
+
+      await manager.query(
+        `
+          UPDATE file_submissions
+          SET status = $2,
+              rejection_reason = $3,
+              reviewed_by_user_id = $4,
+              reviewed_at = NOW(),
+              updated_at = NOW()
+          WHERE id = $1
+        `,
+        [id, status, action === 'reject' ? cleanedReason : null, user.sub],
+      );
+
+      await this.addEvent(manager, id, user.sub, status, {
+        reason: cleanedReason,
+        importStatus: 'not_processed',
+      });
+    });
+
+    return this.findOne(id);
+  }
+
+  async versions(user: AuthUser, id: number) {
+    const submission = await this.findOne(id);
+
+    this.ensureVisible(user, submission);
+
+    const rows: VersionRow[] = await this.db.query(
+      `
+          SELECT
+            id,
+            submission_id AS "submissionId",
+            version,
+            original_name AS "originalName",
+            storage_key AS "storageKey",
+            mime_type AS "mimeType",
+            size_bytes::text AS "sizeBytes",
+            sha256,
+            created_at AS "createdAt"
+          FROM file_submission_versions
+          WHERE submission_id = $1
+          ORDER BY version DESC
+        `,
+      [id],
+    );
+
+    return rows.map(({ storageKey, ...version }) => version);
+  }
+
+  /**
+   * Download: xác thực quyền + SHA-256.
+   * Trả path cho controller stream qua HTTP.
+   * Không nạp toàn bộ nội dung vào RAM.
+   */
+  async download(
+    user: AuthUser,
+    id: number,
+    version?: string,
+  ): Promise<{
+    absolutePath: string;
+    filename: string;
+    mimeType: string;
+    sizeBytes: number;
+  }> {
+    const submission = await this.findOne(id);
+
+    this.ensureVisible(user, submission);
+
+    const selectedVersion =
+      version === undefined
+        ? submission.currentVersion
+        : parsePositiveId(version, 'Phiên bản');
+
+    const rows: VersionRow[] = await this.db.query(
+      `
+          SELECT
+            id,
+            submission_id AS "submissionId",
+            version,
+            original_name AS "originalName",
+            storage_key AS "storageKey",
+            mime_type AS "mimeType",
+            size_bytes::text AS "sizeBytes",
+            sha256,
+            created_at AS "createdAt"
+          FROM file_submission_versions
+          WHERE submission_id = $1
+            AND version = $2
+          LIMIT 1
+        `,
+      [id, selectedVersion],
+    );
+
+    if (!rows.length) {
+      throw new NotFoundException('Không tìm thấy phiên bản file.');
+    }
+
+    const selected = rows[0];
+
+    // storage_key do hệ thống sinh, không bao giờ
+    // sử dụng tên file người dùng làm đường dẫn.
+    if (!/^[a-f0-9-]{36}\.(xml|xlsx|xls|pdf)$/i.test(selected.storageKey)) {
+      throw new ConflictException('Khóa lưu trữ file không hợp lệ.');
+    }
+
+    const absolutePath = join(STORAGE_ROOT, selected.storageKey);
+
+    let fileInfo: Awaited<ReturnType<typeof stat>>;
+
+    try {
+      fileInfo = await stat(absolutePath);
+    } catch {
+      throw new NotFoundException('File không tồn tại trên máy chủ.');
+    }
+
+    const expectedSize = Number(selected.sizeBytes);
+
+    if (!fileInfo.isFile() || fileInfo.size !== expectedSize) {
+      throw new ConflictException(
+        'Kích thước file không khớp dữ liệu lưu trữ.',
+      );
+    }
+
+    let currentHash: string;
+
+    try {
+      currentHash = await hashFile(absolutePath);
+    } catch {
+      throw new NotFoundException('Không thể đọc file trên máy chủ.');
+    }
+
+    if (currentHash !== selected.sha256) {
+      throw new ConflictException('File không vượt qua kiểm tra SHA-256.');
+    }
+
+    await this.addEvent(this.db.manager, id, user.sub, 'downloaded', {
+      version: selectedVersion,
+    });
+
+    return {
+      absolutePath,
+      filename: selected.originalName,
+      mimeType: selected.mimeType,
+      sizeBytes: expectedSize,
+    };
+  }
+}

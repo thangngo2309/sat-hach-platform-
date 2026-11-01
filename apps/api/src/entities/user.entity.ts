@@ -1,3 +1,4 @@
+
 import {
   Column,
   CreateDateColumn,
@@ -16,6 +17,11 @@ export enum UserRole {
   ADMIN = 'admin',
   SYSTEM_ADMIN = 'system_admin',
   USER = 'user',
+
+  TRAINING_SCHOOL = 'training_school',
+  PC08_STAFF = 'pc08_staff',
+  EXAM_CENTER = 'exam_center',
+  EXAM_SECRETARY = 'exam_secretary',
 }
 
 export enum UserStatus {

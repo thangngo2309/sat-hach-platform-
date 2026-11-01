@@ -1,4 +1,12 @@
-export type UserRole = "super_admin" | "admin" | "system_admin" | "user";
+export type UserRole =
+  | "super_admin"
+  | "admin"
+  | "system_admin"
+  | "user"
+  | "training_school"
+  | "pc08_staff"
+  | "exam_center"
+  | "exam_secretary";
 
 export type UserStatus = "active" | "inactive" | "suspended";
 
@@ -73,14 +81,15 @@ export async function apiRequest<T>(
 export function login(username: string, password: string) {
   return apiRequest<AuthSession>("/auth/login", {
     method: "POST",
-    body: JSON.stringify({ username, password }),
+    body: JSON.stringify({
+      username,
+      password,
+    }),
   });
 }
 
 export function refreshSession() {
-  return apiRequest<AuthSession>("/auth/refresh", {
-    method: "POST",
-  });
+  return apiRequest<AuthSession>("/auth/refresh", { method: "POST" });
 }
 
 export function logout() {

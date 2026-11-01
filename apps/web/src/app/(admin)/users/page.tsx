@@ -51,6 +51,7 @@ import {
 } from "@/lib/user-management";
 import { ExportAdminStudentsButton } from "@/components/users/ExportAdminStudentsButton";
 import { StudentPdfActions } from "@/components/students/StudentPdfActions";
+import { OrganizationAccountsSection } from "@/components/users/OrganizationAccountsSection";
 
 type UserForm = {
   username: string;
@@ -594,6 +595,9 @@ export default function UsersPage() {
         </TableContainer>
       </Card>
 
+      {/* QUẢN LÝ TÀI KHOẢN ĐƠN VỊ NGHIỆP VỤ */}
+      <OrganizationAccountsSection />
+      
       {/* Dialog tạo / sửa tài khoản */}
       <Dialog
         open={formOpen}
