@@ -14,6 +14,8 @@ import {
 } from '@nestjs/common';
 
 import { FileInterceptor } from '@nestjs/platform-express';
+import { InjectDataSource } from '@nestjs/typeorm';
+import { DataSource } from 'typeorm';
 import { diskStorage } from 'multer';
 
 import { randomUUID } from 'node:crypto';
@@ -74,10 +76,16 @@ const uploadOptions = {
   limits: {
     fileSize: getFileUploadMaxBytes(),
     files: 1,
-    fields: 5,
+    fields: 6,
     fieldSize: 16 * 1024,
-    parts: 6,
+    parts: 7,
   },
+};
+
+type ItOfficerOption = {
+  id: number;
+  username: string;
+  fullName: string;
 };
 
 @Controller('file-submissions')
@@ -88,11 +96,42 @@ export class FileSubmissionsController {
     private readonly service: FileSubmissionsService,
     private readonly importService: FileSubmissionImportService,
     private readonly examApproval: ExamFileApprovalService,
+    @InjectDataSource()
+    private readonly db: DataSource,
   ) {}
 
   @Get('options')
   options(@CurrentUser() user: AuthUser) {
     return this.service.options(user);
+  }
+
+  /**
+   * Danh sách tài khoản IT phục vụ khai báo KQSH.
+   *
+   * Sử dụng tài khoản SYSTEM_ADMIN hiện có.
+   * Không cấp thêm quyền cho các tài khoản này.
+   */
+  @Get('it-officers')
+  @Roles(UserRole.EXAM_CENTER, UserRole.SUPER_ADMIN)
+  async itOfficers(): Promise<ItOfficerOption[]> {
+    return this.db.query(
+      `
+        SELECT
+          id,
+          username,
+          full_name AS "fullName"
+        FROM users
+        WHERE role = $1
+        ORDER BY full_name ASC, username ASC, id ASC
+      `,
+      [UserRole.SYSTEM_ADMIN],
+    );
+  }
+
+  @Get('exam-sessions')
+  @Roles(UserRole.EXAM_CENTER)
+  examSessions(@CurrentUser() user: AuthUser) {
+    return this.service.examSessionOptions(user);
   }
 
   @Get('import-states')
@@ -115,6 +154,7 @@ export class FileSubmissionsController {
       trainingSchoolId?: string;
       examinationCenterId?: string;
       note?: string;
+      documentMetadata?: string;
     },
     @UploadedFile() file?: Express.Multer.File,
   ) {
@@ -126,9 +166,10 @@ export class FileSubmissionsController {
   replace(
     @CurrentUser() user: AuthUser,
     @Param('id', ParseIntPipe) id: number,
+    @Body() body: { documentMetadata?: string },
     @UploadedFile() file?: Express.Multer.File,
   ) {
-    return this.service.replace(user, id, file);
+    return this.service.replace(user, id, file, body?.documentMetadata);
   }
 
   @Get(':id/versions')
@@ -151,9 +192,13 @@ export class FileSubmissionsController {
     const safeName = file.filename.replace(/[\r\n"\\]/g, '_').slice(0, 255);
 
     response.setHeader('Content-Type', 'application/octet-stream');
+
     response.setHeader('Content-Length', String(file.sizeBytes));
+
     response.setHeader('Cache-Control', 'private, no-store');
+
     response.setHeader('X-Content-Type-Options', 'nosniff');
+
     response.setHeader(
       'Content-Disposition',
       `attachment; filename="submission-${id}"; filename*=UTF-8''${encodeURIComponent(safeName)}`,
@@ -166,6 +211,7 @@ export class FileSubmissionsController {
         response.destroy(error instanceof Error ? error : undefined);
         return;
       }
+
       throw error;
     }
   }
@@ -199,11 +245,6 @@ export class FileSubmissionsController {
       return this.examApproval.approve(user, id);
     }
 
-    /**
-     * Kết quả BC2 từ PC08:
-     * Ở Giai đoạn 5 chưa có parser nhập kết quả BC2.
-     * Duyệt để phân phối file, không ghi dữ liệu chính.
-     */
     if (fileType === 'bc2_result') {
       return this.service.review(user, id, 'approve');
     }

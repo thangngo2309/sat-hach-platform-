@@ -155,6 +155,24 @@ function emptyLicense(): ExistingLicense {
   };
 }
 
+const EXAMINATION_CONTENT_OPTIONS = [
+  { value: "1", label: "1 - Sát hạch lần đầu: L + H Mô tô" },
+  {
+    value: "2",
+    label: "2 - Sát hạch lại: L Mô tô, ô tô tồn đọng hoặc phục hồi",
+  },
+  { value: "3", label: "3 - Sát hạch lại: L + H Mô tô, ô tô tồn đọng" },
+  { value: "4", label: "4 - Sát hạch lại: L + H + Đ Ô tô" },
+  { value: "5", label: "5 - Sát hạch lại: H + Đ Ô tô" },
+  { value: "6", label: "6 - Sát hạch lại: Đ Ô tô" },
+  {
+    value: "7",
+    label: "7 - Sát hạch lại: H Mô tô, mô tô miễn lý thuyết hoặc ô tô tồn đọng",
+  },
+  { value: "18", label: "18 - Sát hạch lại: L + Đ Ô tô tồn đọng" },
+  { value: "21", label: "21 - Sát hạch lần đầu: L + H + Đ Ô tô" },
+] as const;
+
 export function StudentFormDialog({ open, student, onClose, onSaved }: Props) {
   const { accessToken, user } = useAuth();
 
@@ -673,7 +691,24 @@ export function StudentFormDialog({ open, student, onClose, onSaved }: Props) {
                 ))}
               </TextField>
 
-              {textField("Nội dung sát hạch", "examinationContent")}
+              <TextField
+                select
+                fullWidth
+                size="small"
+                label="Nội dung sát hạch"
+                value={form.examinationContent ?? ""}
+                onChange={(event) =>
+                  change("examinationContent", event.target.value)
+                }
+              >
+                <MenuItem value="">Chọn nội dung sát hạch</MenuItem>
+
+                {EXAMINATION_CONTENT_OPTIONS.map((option) => (
+                  <MenuItem key={option.value} value={option.value}>
+                    {option.label}
+                  </MenuItem>
+                ))}
+              </TextField>
 
               {textField("Cơ quan cấp giấy tờ", "certificateIssuer")}
 
@@ -705,7 +740,7 @@ export function StudentFormDialog({ open, student, onClose, onSaved }: Props) {
                 "Nơi xác nhận hoàn thành khóa học",
                 "trainingCompletionIssuer"
               )}
-              
+
               {/* GIẤY TỜ KÈM THEO */}
               <Divider sx={{ mt: 1 }} />
 

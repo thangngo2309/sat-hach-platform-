@@ -14,6 +14,10 @@ import { DataSource, type EntityManager } from 'typeorm';
 
 import { UserRole } from '../../entities/user.entity.js';
 import type { AuthUser } from '../../shared/types/auth-user.type.js';
+import {
+  parseDocumentMetadata,
+  type DocumentMetadata,
+} from './file-document-metadata.js';
 
 export const FILE_TYPES = [
   'bc1',
@@ -32,6 +36,7 @@ type UploadInput = {
   trainingSchoolId?: string;
   examinationCenterId?: string;
   note?: string;
+  documentMetadata?: string;
 };
 
 type SubmissionRow = {
@@ -48,6 +53,7 @@ type SubmissionRow = {
   rejectionReason: string | null;
   currentVersion: number;
   importStatus: string;
+  documentMetadata: DocumentMetadata;
   originalName: string;
   sizeBytes: string;
   createdAt: Date;
@@ -64,6 +70,7 @@ type VersionRow = {
   mimeType: string;
   sizeBytes: string;
   sha256: string;
+  documentMetadata: DocumentMetadata;
   createdAt: Date;
 };
 
@@ -136,10 +143,6 @@ function getOriginalName(file: Express.Multer.File): string {
   return name.slice(0, 255) || 'upload';
 }
 
-/**
- * Đọc một đoạn nhỏ ở đầu file.
- * Không đưa toàn bộ XML / Excel / PDF vào RAM.
- */
 async function readHeader(path: string, length = 8192): Promise<Buffer> {
   const handle = await open(path, 'r');
 
@@ -153,13 +156,6 @@ async function readHeader(path: string, length = 8192): Promise<Buffer> {
   }
 }
 
-/**
- * Kiểm tra định dạng ở mức chữ ký file.
- *
- * Đây không phải parser XML hoặc kiểm tra
- * toàn bộ cấu trúc báo cáo. Việc đó được
- * thực hiện ở các service import sau duyệt.
- */
 async function validateDiskFile(
   file: Express.Multer.File | undefined,
 ): Promise<{
@@ -222,7 +218,6 @@ async function validateDiskFile(
       .equals(Buffer.from([0xef, 0xbb, 0xbf]));
 
     const isUtf16Le = header[0] === 0xff && header[1] === 0xfe;
-
     const isUtf16Be = header[0] === 0xfe && header[1] === 0xff;
 
     let start: string;
@@ -261,10 +256,6 @@ async function validateDiskFile(
   };
 }
 
-/**
- * SHA-256 tính theo stream, sử dụng bộ đệm
- * của Node.js thay vì đọc toàn bộ file.
- */
 async function hashFile(path: string): Promise<string> {
   const hash = createHash('sha256');
 
@@ -275,13 +266,6 @@ async function hashFile(path: string): Promise<string> {
   return hash.digest('hex');
 }
 
-/**
- * Temp và kho chính nằm trên cùng volume
- * thì rename gần như tức thời.
- *
- * Nếu ở hai filesystem khác nhau, fallback
- * copyFile rồi xóa file tạm.
- */
 async function moveFile(source: string, destination: string): Promise<void> {
   try {
     await rename(source, destination);
@@ -321,13 +305,13 @@ export class FileSubmissionsService {
   private async getAssignment(userId: number): Promise<AssignmentRow> {
     const rows: AssignmentRow[] = await this.db.query(
       `
-          SELECT
-            training_school_id AS "trainingSchoolId",
-            examination_center_id AS "examinationCenterId"
-          FROM user_organization_assignments
-          WHERE user_id = $1
-          LIMIT 1
-        `,
+        SELECT
+          training_school_id AS "trainingSchoolId",
+          examination_center_id AS "examinationCenterId"
+        FROM user_organization_assignments
+        WHERE user_id = $1
+        LIMIT 1
+      `,
       [userId],
     );
 
@@ -365,6 +349,53 @@ export class FileSubmissionsService {
       trainingSchools,
       examinationCenters,
     };
+  }
+
+  async examSessionOptions(user: AuthUser) {
+    if (user.role !== UserRole.EXAM_CENTER) {
+      throw new ForbiddenException(
+        'Chỉ tài khoản TTSH được lấy danh sách kỳ sát hạch.',
+      );
+    }
+    const assignment = await this.getAssignment(user.sub);
+    if (!assignment.examinationCenterId) {
+      throw new ForbiddenException('Tài khoản chưa được gắn TTSH.');
+    }
+    return this.db.query(
+      `
+      SELECT id, code, exam_date::text AS "examDate"
+      FROM examination_sessions
+      WHERE examination_center_id = $1
+      ORDER BY exam_date DESC, id DESC
+      LIMIT 500
+    `,
+      [assignment.examinationCenterId],
+    );
+  }
+
+  private async validateMetadataSession(
+    type: FileType,
+    metadata: DocumentMetadata,
+    centerId: number | null,
+  ): Promise<void> {
+    if (type !== 'exam_result') return;
+    if (!centerId)
+      throw new BadRequestException('Tài khoản chưa được gắn TTSH.');
+    const rows: Array<{ id: number; examDate: string }> = await this.db.query(
+      `
+      SELECT id, exam_date::text AS "examDate"
+      FROM examination_sessions
+      WHERE id = $1 AND examination_center_id = $2
+    `,
+      [Number(metadata.examinationSessionId), centerId],
+    );
+    if (!rows.length)
+      throw new BadRequestException(
+        'Kỳ sát hạch không thuộc TTSH của tài khoản.',
+      );
+    if (rows[0].examDate.slice(0, 10) !== metadata.examinationDate) {
+      throw new BadRequestException('Ngày sát hạch không khớp kỳ đã chọn.');
+    }
   }
 
   private async validateScope(
@@ -417,10 +448,10 @@ export class FileSubmissionsService {
     if (schoolId !== null) {
       const school: Array<{ id: number }> = await this.db.query(
         `
-            SELECT id
-            FROM training_schools
-            WHERE id = $1
-          `,
+          SELECT id
+          FROM training_schools
+          WHERE id = $1
+        `,
         [schoolId],
       );
 
@@ -432,11 +463,11 @@ export class FileSubmissionsService {
     if (centerId !== null) {
       const center: Array<{ id: number }> = await this.db.query(
         `
-            SELECT id
-            FROM examination_centers
-            WHERE id = $1
-              AND is_active = TRUE
-          `,
+          SELECT id
+          FROM examination_centers
+          WHERE id = $1
+            AND is_active = TRUE
+        `,
         [centerId],
       );
 
@@ -450,10 +481,6 @@ export class FileSubmissionsService {
     return { schoolId, centerId };
   }
 
-  /**
-   * Chuẩn hóa một file Multer đã được lưu tạm
-   * thành file trong kho chính.
-   */
   private async prepareStoredFile(
     file: Express.Multer.File,
   ): Promise<StoredFile> {
@@ -464,9 +491,7 @@ export class FileSubmissionsService {
     });
 
     const sha256 = await hashFile(file.path);
-
     const storageKey = `${randomUUID()}${validated.extension}`;
-
     const absolutePath = join(STORAGE_ROOT, storageKey);
 
     await moveFile(file.path, absolutePath);
@@ -519,6 +544,7 @@ export class FileSubmissionsService {
       s.import_status AS "importStatus",
       v.original_name AS "originalName",
       v.size_bytes::text AS "sizeBytes",
+      COALESCE(v.document_metadata, '{}'::jsonb) AS "documentMetadata",
       s.created_at AS "createdAt",
       s.updated_at AS "updatedAt",
       s.reviewed_at AS "reviewedAt"
@@ -542,10 +568,10 @@ export class FileSubmissionsService {
   private async findOne(id: number): Promise<SubmissionRow> {
     const rows: SubmissionRow[] = await this.db.query(
       `
-          ${this.baseQuery}
-          WHERE s.id = $1
-          LIMIT 1
-        `,
+        ${this.baseQuery}
+        WHERE s.id = $1
+        LIMIT 1
+      `,
       [id],
     );
 
@@ -619,6 +645,8 @@ export class FileSubmissionsService {
       }
 
       const scope = await this.validateScope(user, type, input);
+      const metadata = parseDocumentMetadata(type, input.documentMetadata);
+      await this.validateMetadataSession(type, metadata, scope.centerId);
 
       const note = input.note?.trim().slice(0, 2000) || null;
 
@@ -627,16 +655,16 @@ export class FileSubmissionsService {
       const result = await this.db.transaction(async (manager) => {
         const created: Array<{ id: number }> = await manager.query(
           `
-                INSERT INTO file_submissions (
-                  file_type,
-                  uploaded_by_user_id,
-                  training_school_id,
-                  examination_center_id,
-                  note
-                )
-                VALUES ($1, $2, $3, $4, $5)
-                RETURNING id
-              `,
+            INSERT INTO file_submissions (
+              file_type,
+              uploaded_by_user_id,
+              training_school_id,
+              examination_center_id,
+              note
+            )
+            VALUES ($1, $2, $3, $4, $5)
+            RETURNING id
+          `,
           [type, user.sub, scope.schoolId, scope.centerId, note],
         );
 
@@ -644,20 +672,21 @@ export class FileSubmissionsService {
 
         await manager.query(
           `
-              INSERT INTO file_submission_versions (
-                submission_id,
-                version,
-                original_name,
-                storage_key,
-                mime_type,
-                size_bytes,
-                sha256,
-                uploaded_by_user_id
-              )
-              VALUES (
-                $1, 1, $2, $3, $4, $5, $6, $7
-              )
-            `,
+            INSERT INTO file_submission_versions (
+              submission_id,
+              version,
+              original_name,
+              storage_key,
+              mime_type,
+              size_bytes,
+              sha256,
+              uploaded_by_user_id,
+              document_metadata
+            )
+            VALUES (
+              $1, 1, $2, $3, $4, $5, $6, $7, $8::jsonb
+            )
+          `,
           [
             submissionId,
             stored!.originalName,
@@ -666,21 +695,20 @@ export class FileSubmissionsService {
             stored!.sizeBytes,
             stored!.sha256,
             user.sub,
+            JSON.stringify(metadata),
           ],
         );
 
         await this.addEvent(manager, submissionId, user.sub, 'created', {
           fileType: type,
           filename: stored!.originalName,
+          documentMetadata: metadata,
         });
 
         return submissionId;
       });
 
-      // Đã commit thành công: không xóa file
-      // ngay cả khi truy vấn trả kết quả lỗi.
       stored = null;
-
       return this.findOne(result);
     } finally {
       if (uploadedFile?.path) {
@@ -697,6 +725,7 @@ export class FileSubmissionsService {
     user: AuthUser,
     id: number,
     uploadedFile?: Express.Multer.File,
+    rawMetadata?: string,
   ): Promise<SubmissionRow> {
     let stored: StoredFile | null = null;
 
@@ -717,6 +746,13 @@ export class FileSubmissionsService {
         throw new ConflictException('Chỉ được thay file khi chưa được duyệt.');
       }
 
+      const metadata = parseDocumentMetadata(submission.fileType, rawMetadata);
+      await this.validateMetadataSession(
+        submission.fileType,
+        metadata,
+        submission.examinationCenterId,
+      );
+
       stored = await this.prepareStoredFile(uploadedFile);
 
       await this.db.transaction(async (manager) => {
@@ -726,14 +762,14 @@ export class FileSubmissionsService {
           uploaded_by_user_id: number;
         }> = await manager.query(
           `
-              SELECT
-                status,
-                current_version,
-                uploaded_by_user_id
-              FROM file_submissions
-              WHERE id = $1
-              FOR UPDATE
-            `,
+            SELECT
+              status,
+              current_version,
+              uploaded_by_user_id
+            FROM file_submissions
+            WHERE id = $1
+            FOR UPDATE
+          `,
           [id],
         );
 
@@ -751,20 +787,21 @@ export class FileSubmissionsService {
 
         await manager.query(
           `
-              INSERT INTO file_submission_versions (
-                submission_id,
-                version,
-                original_name,
-                storage_key,
-                mime_type,
-                size_bytes,
-                sha256,
-                uploaded_by_user_id
-              )
-              VALUES (
-                $1, $2, $3, $4, $5, $6, $7, $8
-              )
-            `,
+            INSERT INTO file_submission_versions (
+              submission_id,
+              version,
+              original_name,
+              storage_key,
+              mime_type,
+              size_bytes,
+              sha256,
+              uploaded_by_user_id,
+              document_metadata
+            )
+            VALUES (
+              $1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb
+            )
+          `,
           [
             id,
             nextVersion,
@@ -774,6 +811,7 @@ export class FileSubmissionsService {
             stored!.sizeBytes,
             stored!.sha256,
             user.sub,
+            JSON.stringify(metadata),
           ],
         );
 
@@ -788,18 +826,18 @@ export class FileSubmissionsService {
                 import_completed_at = NULL,
                 updated_at = NOW()
             WHERE id = $1
-            `,
+          `,
           [id, nextVersion],
         );
 
         await this.addEvent(manager, id, user.sub, 'version_uploaded', {
           version: nextVersion,
           filename: stored!.originalName,
+          documentMetadata: metadata,
         });
       });
 
       stored = null;
-
       return this.findOne(id);
     } finally {
       if (uploadedFile?.path) {
@@ -884,31 +922,27 @@ export class FileSubmissionsService {
 
     const rows: VersionRow[] = await this.db.query(
       `
-          SELECT
-            id,
-            submission_id AS "submissionId",
-            version,
-            original_name AS "originalName",
-            storage_key AS "storageKey",
-            mime_type AS "mimeType",
-            size_bytes::text AS "sizeBytes",
-            sha256,
-            created_at AS "createdAt"
-          FROM file_submission_versions
-          WHERE submission_id = $1
-          ORDER BY version DESC
-        `,
+        SELECT
+          id,
+          submission_id AS "submissionId",
+          version,
+          original_name AS "originalName",
+          storage_key AS "storageKey",
+          mime_type AS "mimeType",
+          size_bytes::text AS "sizeBytes",
+          sha256,
+          COALESCE(document_metadata, '{}'::jsonb) AS "documentMetadata",
+          created_at AS "createdAt"
+        FROM file_submission_versions
+        WHERE submission_id = $1
+        ORDER BY version DESC
+      `,
       [id],
     );
 
     return rows.map(({ storageKey, ...version }) => version);
   }
 
-  /**
-   * Download: xác thực quyền + SHA-256.
-   * Trả path cho controller stream qua HTTP.
-   * Không nạp toàn bộ nội dung vào RAM.
-   */
   async download(
     user: AuthUser,
     id: number,
@@ -930,21 +964,22 @@ export class FileSubmissionsService {
 
     const rows: VersionRow[] = await this.db.query(
       `
-          SELECT
-            id,
-            submission_id AS "submissionId",
-            version,
-            original_name AS "originalName",
-            storage_key AS "storageKey",
-            mime_type AS "mimeType",
-            size_bytes::text AS "sizeBytes",
-            sha256,
-            created_at AS "createdAt"
-          FROM file_submission_versions
-          WHERE submission_id = $1
-            AND version = $2
-          LIMIT 1
-        `,
+        SELECT
+          id,
+          submission_id AS "submissionId",
+          version,
+          original_name AS "originalName",
+          storage_key AS "storageKey",
+          mime_type AS "mimeType",
+          size_bytes::text AS "sizeBytes",
+          sha256,
+          COALESCE(document_metadata, '{}'::jsonb) AS "documentMetadata",
+          created_at AS "createdAt"
+        FROM file_submission_versions
+        WHERE submission_id = $1
+          AND version = $2
+        LIMIT 1
+      `,
       [id, selectedVersion],
     );
 
@@ -954,8 +989,6 @@ export class FileSubmissionsService {
 
     const selected = rows[0];
 
-    // storage_key do hệ thống sinh, không bao giờ
-    // sử dụng tên file người dùng làm đường dẫn.
     if (!/^[a-f0-9-]{36}\.(xml|xlsx|xls|pdf)$/i.test(selected.storageKey)) {
       throw new ConflictException('Khóa lưu trữ file không hợp lệ.');
     }

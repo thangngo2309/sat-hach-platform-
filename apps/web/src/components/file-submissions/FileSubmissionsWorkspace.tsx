@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
   Alert,
@@ -9,6 +9,10 @@ import {
   Card,
   Chip,
   CircularProgress,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
   Divider,
   MenuItem,
   Stack,
@@ -31,23 +35,34 @@ import {
 } from "@mui/icons-material";
 
 import { useAuth } from "@/components/auth/AuthProvider";
-
-import type {
-  OrganizationOptions,
-} from "@/lib/organization-accounts";
+import type { OrganizationOptions } from "@/lib/organization-accounts";
 
 import {
   downloadFileSubmission,
   FILE_TYPE_LABELS,
+  formatItOfficer,
+  getFileSubmissionOptions,
+  listExamSessionOptions,
   listFileSubmissionVersions,
   listFileSubmissions,
+  listItOfficerOptions,
   replaceFileSubmission,
   STATUS_LABELS,
   uploadFileSubmission,
+  type ExamSessionOption,
   type FileSubmission,
+  type FileSubmissionVersion,
+  type ItOfficerOption,
   type SubmissionFileType,
-  getFileSubmissionOptions,
 } from "@/lib/file-submissions";
+
+import {
+  describeMetadata,
+  DOCUMENT_FIELDS,
+  LICENSE_CLASSES,
+  validateMetadata,
+  type DocumentMetadata,
+} from "@/lib/file-document-metadata";
 
 const ROLE_FILE_TYPES: Record<string, SubmissionFileType[]> = {
   training_school: ["bc1", "bc2"],
@@ -61,12 +76,189 @@ const EMPTY_OPTIONS: OrganizationOptions = {
 };
 
 function formatTime(value: string): string {
-  return new Date(value).toLocaleString("vi-VN");
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString("vi-VN");
 }
 
-function formatSize(bytes: string): string {
-  const size = Number(bytes);
-  return `${(size / 1024 / 1024).toFixed(2)} MB`;
+function formatSize(value: string): string {
+  const bytes = Number(value);
+  return Number.isFinite(bytes)
+    ? `${(bytes / 1024 / 1024).toFixed(2)} MB`
+    : "—";
+}
+
+type MetadataFormProps = {
+  fileType: SubmissionFileType;
+  values: DocumentMetadata;
+  onChange: (next: DocumentMetadata) => void;
+  sessions: ExamSessionOption[];
+  itOfficers: ItOfficerOption[];
+  loadingOfficers?: boolean;
+  disabled?: boolean;
+};
+
+function MetadataForm({
+  fileType,
+  values,
+  onChange,
+  sessions,
+  itOfficers,
+  loadingOfficers = false,
+  disabled = false,
+}: MetadataFormProps) {
+  const fields = DOCUMENT_FIELDS[fileType];
+
+  if (!fields.length) return null;
+
+  const update = (key: string, value: string) => {
+    onChange({ ...values, [key]: value });
+  };
+
+  return (
+    <Card variant="outlined" sx={{ p: 2, borderRadius: 2 }}>
+      <Typography sx={{ fontWeight: 700, mb: 2 }}>
+        Thông tin đi kèm hồ sơ
+      </Typography>
+
+      <Box
+        sx={{
+          display: "grid",
+          gridTemplateColumns: {
+            xs: "1fr",
+            md: "repeat(2, minmax(0, 1fr))",
+          },
+          gap: 2,
+        }}
+      >
+        {fields.map((field) => {
+          if (fileType === "exam_result" && field.key === "itOfficer") {
+            const current = values.itOfficer ?? "";
+
+            const availableValues = itOfficers.map(formatItOfficer);
+
+            const hasLegacyValue =
+              current.length > 0 && !availableValues.includes(current);
+
+            return (
+              <TextField
+                key={field.key}
+                select
+                fullWidth
+                required
+                size="small"
+                label="IT phụ trách"
+                value={current}
+                disabled={
+                  disabled || loadingOfficers || itOfficers.length === 0
+                }
+                onChange={(event) => update("itOfficer", event.target.value)}
+                helperText={
+                  loadingOfficers
+                    ? "Đang tải danh sách IT..."
+                    : itOfficers.length === 0
+                    ? "Chưa có tài khoản IT trong danh sách."
+                    : "Chọn tài khoản IT đã có trong hệ thống."
+                }
+              >
+                <MenuItem value="">Chọn IT phụ trách</MenuItem>
+
+                {hasLegacyValue && (
+                  <MenuItem value={current} disabled>
+                    {current} (giá trị đã lưu)
+                  </MenuItem>
+                )}
+
+                {itOfficers.map((officer) => (
+                  <MenuItem key={officer.id} value={formatItOfficer(officer)}>
+                    {officer.fullName} (@{officer.username})
+                  </MenuItem>
+                ))}
+              </TextField>
+            );
+          }
+
+          if (field.type === "session") {
+            return (
+              <TextField
+                key={field.key}
+                select
+                fullWidth
+                required
+                size="small"
+                label={field.label}
+                value={values[field.key] ?? ""}
+                disabled={disabled}
+                onChange={(event) => {
+                  const selected = sessions.find(
+                    (session) => String(session.id) === event.target.value
+                  );
+
+                  onChange({
+                    ...values,
+                    [field.key]: event.target.value,
+                    examinationDate: selected
+                      ? selected.examDate.slice(0, 10)
+                      : "",
+                  });
+                }}
+              >
+                <MenuItem value="">Chọn kỳ sát hạch</MenuItem>
+
+                {sessions.map((session) => (
+                  <MenuItem key={session.id} value={String(session.id)}>
+                    {session.code} — {session.examDate.slice(0, 10)}
+                  </MenuItem>
+                ))}
+              </TextField>
+            );
+          }
+
+          if (field.type === "license") {
+            return (
+              <TextField
+                key={field.key}
+                select
+                fullWidth
+                required
+                size="small"
+                label={field.label}
+                value={values[field.key] ?? ""}
+                disabled={disabled}
+                onChange={(event) => update(field.key, event.target.value)}
+              >
+                <MenuItem value="">Chọn hạng</MenuItem>
+
+                {LICENSE_CLASSES.map((value) => (
+                  <MenuItem key={value} value={value}>
+                    {value}
+                  </MenuItem>
+                ))}
+              </TextField>
+            );
+          }
+
+          return (
+            <TextField
+              key={field.key}
+              fullWidth
+              required
+              size="small"
+              label={field.label}
+              type={field.type === "date" ? "date" : "text"}
+              value={values[field.key] ?? ""}
+              disabled={disabled}
+              slotProps={
+                field.type === "date"
+                  ? { inputLabel: { shrink: true } }
+                  : { htmlInput: { maxLength: 255 } }
+              }
+              onChange={(event) => update(field.key, event.target.value)}
+            />
+          );
+        })}
+      </Box>
+    </Card>
+  );
 }
 
 export function FileSubmissionsWorkspace() {
@@ -81,6 +273,28 @@ export function FileSubmissionsWorkspace() {
   const [centerId, setCenterId] = useState("");
   const [note, setNote] = useState("");
   const [file, setFile] = useState<File | null>(null);
+  const [metadata, setMetadata] = useState<DocumentMetadata>({});
+
+  const [sessions, setSessions] = useState<ExamSessionOption[]>([]);
+
+  const [itOfficers, setItOfficers] = useState<ItOfficerOption[]>([]);
+
+  const [loadingOfficers, setLoadingOfficers] = useState(false);
+
+  const [replaceTarget, setReplaceTarget] = useState<FileSubmission | null>(
+    null
+  );
+
+  const [replaceFile, setReplaceFile] = useState<File | null>(null);
+
+  const [replacementMetadata, setReplacementMetadata] =
+    useState<DocumentMetadata>({});
+
+  const [versions, setVersions] = useState<FileSubmissionVersion[]>([]);
+
+  const [versionSubmissionId, setVersionSubmissionId] = useState<number | null>(
+    null
+  );
 
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -88,27 +302,53 @@ export function FileSubmissionsWorkspace() {
   const [success, setSuccess] = useState("");
   const [reload, setReload] = useState(0);
 
-  const [versionRows, setVersionRows] = useState<
-    Awaited<ReturnType<typeof listFileSubmissionVersions>>
-  >([]);
-  const [versionSubmissionId, setVersionSubmissionId] = useState<number | null>(
-    null
-  );
-
-  const replacementInputRef = useRef<HTMLInputElement | null>(null);
-
-  const [replacementId, setReplacementId] = useState<number | null>(null);
-
   const allowedTypes = useMemo(
     () => ROLE_FILE_TYPES[user?.role ?? ""] ?? [],
     [user?.role]
   );
 
   useEffect(() => {
-    if (allowedTypes.length > 0 && !allowedTypes.includes(fileType)) {
+    if (allowedTypes.length && !allowedTypes.includes(fileType)) {
       setFileType(allowedTypes[0]);
+      setMetadata({});
     }
   }, [allowedTypes, fileType]);
+
+  useEffect(() => {
+    if (!accessToken || user?.role !== "exam_center") {
+      setSessions([]);
+      setItOfficers([]);
+      return;
+    }
+
+    let active = true;
+    setLoadingOfficers(true);
+
+    void Promise.all([
+      listExamSessionOptions(accessToken),
+      listItOfficerOptions(accessToken),
+    ])
+      .then(([sessionData, officerData]) => {
+        if (!active) return;
+        setSessions(sessionData);
+        setItOfficers(officerData);
+      })
+      .catch((err: unknown) => {
+        if (!active) return;
+        setError(
+          err instanceof Error
+            ? err.message
+            : "Không thể tải kỳ sát hạch hoặc danh sách IT."
+        );
+      })
+      .finally(() => {
+        if (active) setLoadingOfficers(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [accessToken, user?.role]);
 
   const load = useCallback(async () => {
     if (!accessToken || !allowedTypes.length) return;
@@ -122,7 +362,6 @@ export function FileSubmissionsWorkspace() {
 
       if (user?.role === "pc08_staff") {
         const available = await getFileSubmissionOptions(accessToken);
-
         setOptions(available);
       }
     } catch (err) {
@@ -141,24 +380,52 @@ export function FileSubmissionsWorkspace() {
   async function handleUpload() {
     if (!accessToken || !file || saving) return;
 
-    setSaving(true);
     setError("");
     setSuccess("");
+
+    const validationError = validateMetadata(fileType, metadata);
+
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
+
+    if (
+      fileType === "exam_result" &&
+      !itOfficers.some(
+        (officer) => formatItOfficer(officer) === metadata.itOfficer
+      )
+    ) {
+      setError("Vui lòng chọn IT trong danh sách.");
+      return;
+    }
+
+    if (fileType === "bc2_result" && !schoolId) {
+      setError("Vui lòng chọn CSĐT nhận kết quả BC2.");
+      return;
+    }
+
+    if (fileType === "exam_48" && !centerId) {
+      setError("Vui lòng chọn TTSH nhận file 48_.");
+      return;
+    }
+
+    setSaving(true);
 
     try {
       await uploadFileSubmission(accessToken, {
         file,
         fileType,
         note,
-        trainingSchoolId:
-          fileType === "bc2_result" ? Number(schoolId) || null : null,
-        examinationCenterId:
-          fileType === "exam_48" ? Number(centerId) || null : null,
+        documentMetadata: metadata,
+        trainingSchoolId: fileType === "bc2_result" ? Number(schoolId) : null,
+        examinationCenterId: fileType === "exam_48" ? Number(centerId) : null,
       });
 
       setFile(null);
       setNote("");
-      setSuccess("Đã gửi file. Hồ sơ đang chờ SUPER_ADMIN duyệt.");
+      setMetadata({});
+      setSuccess("Đã gửi hồ sơ. File đang chờ SUPER_ADMIN duyệt.");
       setReload((value) => value + 1);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Không thể gửi file.");
@@ -167,17 +434,57 @@ export function FileSubmissionsWorkspace() {
     }
   }
 
-  async function handleReplace(id: number, selectedFile: File) {
-    if (!accessToken) return;
+  function openReplace(item: FileSubmission) {
+    setReplaceTarget(item);
+    setReplaceFile(null);
+    setReplacementMetadata({
+      ...(item.documentMetadata ?? {}),
+    });
+    setError("");
+  }
+
+  async function handleReplace() {
+    if (!accessToken || !replaceTarget || !replaceFile || saving) {
+      return;
+    }
+
+    const validationError = validateMetadata(
+      replaceTarget.fileType,
+      replacementMetadata
+    );
+
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
+
+    if (
+      replaceTarget.fileType === "exam_result" &&
+      !itOfficers.some(
+        (officer) => formatItOfficer(officer) === replacementMetadata.itOfficer
+      )
+    ) {
+      setError("Vui lòng chọn IT trong danh sách.");
+      return;
+    }
 
     setSaving(true);
     setError("");
     setSuccess("");
 
     try {
-      await replaceFileSubmission(accessToken, id, selectedFile);
+      await replaceFileSubmission(
+        accessToken,
+        replaceTarget.id,
+        replaceFile,
+        replacementMetadata
+      );
 
-      setSuccess("Đã cập nhật phiên bản file đang chờ duyệt.");
+      setReplaceTarget(null);
+      setReplaceFile(null);
+      setReplacementMetadata({});
+
+      setSuccess("Đã cập nhật file và thông tin của phiên bản mới.");
       setReload((value) => value + 1);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Không thể thay file.");
@@ -199,16 +506,14 @@ export function FileSubmissionsWorkspace() {
   async function showVersions(id: number) {
     if (!accessToken) return;
 
-    setError("");
-
     try {
       const result = await listFileSubmissionVersions(accessToken, id);
 
-      setVersionRows(result);
+      setVersions(result);
       setVersionSubmissionId(id);
     } catch (err) {
       setError(
-        err instanceof Error ? err.message : "Không thể lấy lịch sử phiên bản."
+        err instanceof Error ? err.message : "Không thể tải lịch sử phiên bản."
       );
     }
   }
@@ -216,10 +521,14 @@ export function FileSubmissionsWorkspace() {
   if (!allowedTypes.length) {
     return (
       <Alert severity="info">
-        Tài khoản không thuộc nhóm được gửi hồ sơ trong giai đoạn này.
+        Tài khoản không được phép gửi hồ sơ tại đây.
       </Alert>
     );
   }
+
+  const versionFileType = rows.find(
+    (item) => item.id === versionSubmissionId
+  )?.fileType;
 
   return (
     <Stack spacing={3}>
@@ -227,8 +536,9 @@ export function FileSubmissionsWorkspace() {
         <Typography variant="h5" sx={{ fontWeight: 800 }}>
           Quản lý hồ sơ gửi lên
         </Typography>
+
         <Typography color="text.secondary">
-          Gửi file, theo dõi phê duyệt và tải lại hồ sơ.
+          Gửi hồ sơ, theo dõi phê duyệt và quản lý các phiên bản file.
         </Typography>
       </Box>
 
@@ -237,6 +547,7 @@ export function FileSubmissionsWorkspace() {
           {error}
         </Alert>
       )}
+
       {success && (
         <Alert severity="success" onClose={() => setSuccess("")}>
           {success}
@@ -252,15 +563,17 @@ export function FileSubmissionsWorkspace() {
 
           <TextField
             select
-            label="Loại file"
-            value={allowedTypes.includes(fileType) ? fileType : allowedTypes[0]}
             fullWidth
             size="small"
+            label="Loại file"
+            value={allowedTypes.includes(fileType) ? fileType : allowedTypes[0]}
             disabled={saving}
             onChange={(event) => {
               setFileType(event.target.value as SubmissionFileType);
               setSchoolId("");
               setCenterId("");
+              setMetadata({});
+              setFile(null);
             }}
           >
             {allowedTypes.map((type) => (
@@ -273,14 +586,16 @@ export function FileSubmissionsWorkspace() {
           {user?.role === "pc08_staff" && fileType === "bc2_result" && (
             <TextField
               select
-              size="small"
               required
               fullWidth
+              size="small"
               label="CSĐT nhận kết quả BC2"
               value={schoolId}
+              disabled={saving}
               onChange={(event) => setSchoolId(event.target.value)}
             >
               <MenuItem value="">Chọn CSĐT</MenuItem>
+
               {options.trainingSchools.map((school) => (
                 <MenuItem key={school.id} value={String(school.id)}>
                   {school.code} — {school.name}
@@ -292,14 +607,16 @@ export function FileSubmissionsWorkspace() {
           {user?.role === "pc08_staff" && fileType === "exam_48" && (
             <TextField
               select
-              size="small"
               required
               fullWidth
+              size="small"
               label="TTSH nhận file dự sát hạch"
               value={centerId}
+              disabled={saving}
               onChange={(event) => setCenterId(event.target.value)}
             >
               <MenuItem value="">Chọn TTSH</MenuItem>
+
               {options.examinationCenters.map((center) => (
                 <MenuItem key={center.id} value={String(center.id)}>
                   {center.code} — {center.name}
@@ -308,6 +625,16 @@ export function FileSubmissionsWorkspace() {
             </TextField>
           )}
 
+          <MetadataForm
+            fileType={fileType}
+            values={metadata}
+            onChange={setMetadata}
+            sessions={sessions}
+            itOfficers={itOfficers}
+            loadingOfficers={loadingOfficers}
+            disabled={saving}
+          />
+
           <Button
             component="label"
             variant="outlined"
@@ -315,11 +642,14 @@ export function FileSubmissionsWorkspace() {
             disabled={saving}
           >
             {file ? file.name : "Chọn file từ máy"}
+
             <input
               hidden
               type="file"
               accept=".xml,.xls,.xlsx,.pdf"
-              onChange={(event) => setFile(event.target.files?.[0] ?? null)}
+              onChange={(event) => {
+                setFile(event.target.files?.[0] ?? null);
+              }}
             />
           </Button>
 
@@ -328,13 +658,16 @@ export function FileSubmissionsWorkspace() {
             multiline
             minRows={2}
             value={note}
+            disabled={saving}
             onChange={(event) => setNote(event.target.value)}
-            slotProps={{ htmlInput: { maxLength: 2000 } }}
+            slotProps={{
+              htmlInput: { maxLength: 2000 },
+            }}
           />
 
           <Alert severity="info">
-            File được lưu trên server và chờ SUPER_ADMIN duyệt. Bạn có thể gửi
-            phiên bản mới khi chưa được duyệt. File đã duyệt sẽ bị khóa.
+            File được lưu trên server và chờ SUPER_ADMIN phê duyệt. Có thể thay
+            file và thông tin khai báo khi hồ sơ chưa được duyệt.
           </Alert>
 
           <Box>
@@ -344,6 +677,11 @@ export function FileSubmissionsWorkspace() {
               disabled={
                 saving ||
                 !file ||
+                Boolean(validateMetadata(fileType, metadata)) ||
+                (fileType === "exam_result" &&
+                  !itOfficers.some(
+                    (officer) => formatItOfficer(officer) === metadata.itOfficer
+                  )) ||
                 (fileType === "bc2_result" && !schoolId) ||
                 (fileType === "exam_48" && !centerId)
               }
@@ -358,24 +696,29 @@ export function FileSubmissionsWorkspace() {
       <Card variant="outlined" sx={{ borderRadius: 3 }}>
         <Stack
           direction="row"
-          sx={{ p: 2, alignItems: "center", justifyContent: "space-between" }}
+          sx={{
+            p: 2,
+            alignItems: "center",
+            justifyContent: "space-between",
+          }}
         >
           <Typography variant="h6" sx={{ fontWeight: 700 }}>
             File đã gửi
           </Typography>
+
           <Button
+            disabled={loading}
             startIcon={
               loading ? <CircularProgress size={16} /> : <RefreshOutlined />
             }
-            disabled={loading}
-            onClick={() => setReload((v) => v + 1)}
+            onClick={() => setReload((value) => value + 1)}
           >
             Tải lại
           </Button>
         </Stack>
 
         <TableContainer>
-          <Table size="small" sx={{ minWidth: 920 }}>
+          <Table size="small" sx={{ minWidth: 1000 }}>
             <TableHead>
               <TableRow>
                 <TableCell>File</TableCell>
@@ -386,6 +729,7 @@ export function FileSubmissionsWorkspace() {
                 <TableCell align="right">Thao tác</TableCell>
               </TableRow>
             </TableHead>
+
             <TableBody>
               {rows.map((item) => (
                 <TableRow key={item.id} hover>
@@ -393,9 +737,24 @@ export function FileSubmissionsWorkspace() {
                     <Typography variant="body2" sx={{ fontWeight: 700 }}>
                       {item.originalName}
                     </Typography>
+
                     <Typography variant="caption" color="text.secondary">
                       #{item.id} · {formatSize(item.sizeBytes)}
                     </Typography>
+
+                    {describeMetadata(item.fileType, item.documentMetadata).map(
+                      (line, index) => (
+                        <Typography
+                          key={`${item.id}-${index}`}
+                          variant="caption"
+                          color="text.secondary"
+                          sx={{ display: "block" }}
+                        >
+                          {line}
+                        </Typography>
+                      )
+                    )}
+
                     {item.rejectionReason && (
                       <Typography
                         variant="caption"
@@ -406,7 +765,9 @@ export function FileSubmissionsWorkspace() {
                       </Typography>
                     )}
                   </TableCell>
+
                   <TableCell>{FILE_TYPE_LABELS[item.fileType]}</TableCell>
+
                   <TableCell>
                     <Chip
                       size="small"
@@ -420,12 +781,15 @@ export function FileSubmissionsWorkspace() {
                       label={STATUS_LABELS[item.status]}
                     />
                   </TableCell>
+
                   <TableCell>{item.currentVersion}</TableCell>
+
                   <TableCell>{formatTime(item.createdAt)}</TableCell>
+
                   <TableCell align="right">
                     <Stack
                       direction="row"
-                      sx={{ justifyContent: "flex-end", spacing: 0.5 }}
+                      sx={{ spacing: 0.5, justifyContent: "flex-end" }}
                     >
                       <Button
                         size="small"
@@ -434,6 +798,7 @@ export function FileSubmissionsWorkspace() {
                       >
                         Tải
                       </Button>
+
                       <Button
                         size="small"
                         startIcon={<HistoryOutlined />}
@@ -441,13 +806,18 @@ export function FileSubmissionsWorkspace() {
                       >
                         Lịch sử
                       </Button>
+
                       {item.status === "pending" && (
                         <Button
                           size="small"
                           disabled={saving}
                           onClick={() => {
-                            setReplacementId(item.id);
-                            replacementInputRef.current?.click();
+                            setReplaceTarget(item);
+                            setReplaceFile(null);
+                            setReplacementMetadata({
+                              ...(item.documentMetadata ?? {}),
+                            });
+                            setError("");
                           }}
                         >
                           Thay file
@@ -457,6 +827,7 @@ export function FileSubmissionsWorkspace() {
                   </TableCell>
                 </TableRow>
               ))}
+
               {!loading && rows.length === 0 && (
                 <TableRow>
                   <TableCell colSpan={6} align="center" sx={{ py: 5 }}>
@@ -469,19 +840,82 @@ export function FileSubmissionsWorkspace() {
         </TableContainer>
       </Card>
 
-      <input
-        ref={replacementInputRef}
-        type="file"
-        accept=".xml,.xls,.xlsx,.pdf"
-        hidden
-        onChange={(event) => {
-          const selectedFile = event.target.files?.[0];
-          if (selectedFile && replacementId !== null) {
-            void handleReplace(replacementId, selectedFile);
-          }
-          event.target.value = "";
+      <Dialog
+        open={replaceTarget !== null}
+        onClose={() => {
+          if (!saving) setReplaceTarget(null);
         }}
-      />
+        fullWidth
+        maxWidth="md"
+      >
+        <DialogTitle component="div">
+          <Typography variant="h6" sx={{ fontWeight: 700 }}>
+            Thay phiên bản hồ sơ #{replaceTarget?.id}
+          </Typography>
+        </DialogTitle>
+
+        <DialogContent dividers>
+          <Stack spacing={2} sx={{ pt: 1 }}>
+            <Typography variant="body2" color="text.secondary">
+              Chọn file mới và xác nhận lại thông tin khai báo trước khi lưu.
+            </Typography>
+
+            <Button component="label" variant="outlined" disabled={saving}>
+              {replaceFile ? replaceFile.name : "Chọn file thay thế"}
+
+              <input
+                hidden
+                type="file"
+                accept=".xml,.xls,.xlsx,.pdf"
+                onChange={(event) => {
+                  setReplaceFile(event.target.files?.[0] ?? null);
+                }}
+              />
+            </Button>
+
+            {replaceTarget && (
+              <MetadataForm
+                fileType={replaceTarget.fileType}
+                values={replacementMetadata}
+                onChange={setReplacementMetadata}
+                sessions={sessions}
+                itOfficers={itOfficers}
+                loadingOfficers={loadingOfficers}
+                disabled={saving}
+              />
+            )}
+          </Stack>
+        </DialogContent>
+
+        <DialogActions>
+          <Button disabled={saving} onClick={() => setReplaceTarget(null)}>
+            Hủy
+          </Button>
+
+          <Button
+            variant="contained"
+            disabled={
+              saving ||
+              !replaceTarget ||
+              !replaceFile ||
+              Boolean(
+                replaceTarget &&
+                  validateMetadata(replaceTarget.fileType, replacementMetadata)
+              ) ||
+              Boolean(
+                replaceTarget?.fileType === "exam_result" &&
+                  !itOfficers.some(
+                    (officer) =>
+                      formatItOfficer(officer) === replacementMetadata.itOfficer
+                  )
+              )
+            }
+            onClick={() => void handleReplace()}
+          >
+            {saving ? "Đang lưu..." : "Lưu phiên bản mới"}
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       {versionSubmissionId !== null && (
         <Card variant="outlined" sx={{ p: 2.5, borderRadius: 3 }}>
@@ -490,12 +924,15 @@ export function FileSubmissionsWorkspace() {
               <Typography sx={{ fontWeight: 700 }}>
                 Lịch sử phiên bản hồ sơ #{versionSubmissionId}
               </Typography>
+
               <Button size="small" onClick={() => setVersionSubmissionId(null)}>
                 Đóng
               </Button>
             </Stack>
+
             <Divider />
-            {versionRows.map((version) => (
+
+            {versions.map((version) => (
               <Stack
                 key={version.id}
                 direction="row"
@@ -509,28 +946,49 @@ export function FileSubmissionsWorkspace() {
                   <Typography variant="body2">
                     Bản {version.version}: {version.originalName}
                   </Typography>
-                  <Typography variant="caption" color="text.secondary">
+
+                  <Typography
+                    variant="caption"
+                    color="text.secondary"
+                    sx={{ display: "block" }}
+                  >
                     {formatTime(version.createdAt)}
                   </Typography>
+
+                  {versionFileType &&
+                    describeMetadata(
+                      versionFileType,
+                      version.documentMetadata
+                    ).map((line, index) => (
+                      <Typography
+                        key={`${version.id}-${index}`}
+                        variant="caption"
+                        color="text.secondary"
+                        sx={{ display: "block" }}
+                      >
+                        {line}
+                      </Typography>
+                    ))}
                 </Box>
+
                 <Button
                   size="small"
                   startIcon={<DownloadOutlined />}
                   onClick={() => {
-                    if (accessToken) {
-                      void downloadFileSubmission(
-                        accessToken,
-                        versionSubmissionId,
-                        version.originalName,
-                        version.version
-                      ).catch((err: unknown) =>
-                        setError(
-                          err instanceof Error
-                            ? err.message
-                            : "Không thể tải phiên bản."
-                        )
+                    if (!accessToken) return;
+
+                    void downloadFileSubmission(
+                      accessToken,
+                      versionSubmissionId,
+                      version.originalName,
+                      version.version
+                    ).catch((err: unknown) => {
+                      setError(
+                        err instanceof Error
+                          ? err.message
+                          : "Không thể tải phiên bản."
                       );
-                    }
+                    });
                   }}
                 >
                   Tải

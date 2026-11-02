@@ -394,6 +394,8 @@ export class FileSubmissionReviewService {
       search?: string;
       fileType?: string;
       status?: string;
+      trainingSchoolId?: string;
+      examinationCenterId?: string;
     },
   ) {
     this.assertRole(user);
@@ -403,6 +405,35 @@ export class FileSubmissionReviewService {
     const search = (options.search ?? '').trim().slice(0, 150);
     const fileType = (options.fileType ?? '').trim();
     const status = (options.status ?? '').trim();
+
+    const parseOptionalId = (
+      value: string | undefined,
+      label: string,
+    ): number | null => {
+      if (!value) return null;
+
+      if (!/^[1-9]\d*$/.test(value)) {
+        throw new BadRequestException(`${label} không hợp lệ.`);
+      }
+
+      const id = Number(value);
+
+      if (!Number.isSafeInteger(id)) {
+        throw new BadRequestException(`${label} không hợp lệ.`);
+      }
+
+      return id;
+    };
+
+    const trainingSchoolId = parseOptionalId(
+      options.trainingSchoolId,
+      'Cơ sở đào tạo',
+    );
+
+    const examinationCenterId = parseOptionalId(
+      options.examinationCenterId,
+      'Trung tâm sát hạch',
+    );
 
     const validTypes = [
       '',
@@ -443,9 +474,25 @@ export class FileSubmissionReviewService {
           )
           AND ($4::text = '' OR s.file_type = $4::text)
           AND ($5::text = '' OR s.status = $5::text)
+          AND (
+            $6::int IS NULL
+            OR s.training_school_id = $6::int
+          )
+          AND (
+            $7::int IS NULL
+            OR s.examination_center_id = $7::int
+          )
       `;
 
-    const params = [user.role, user.sub, search, fileType, status];
+    const params = [
+      user.role,
+      user.sub,
+      search,
+      fileType,
+      status,
+      trainingSchoolId,
+      examinationCenterId,
+    ];
 
     const [countRows, rows] = await Promise.all([
       this.db.query(`SELECT COUNT(*)::int AS total ${baseSql}`, params),
@@ -468,7 +515,7 @@ export class FileSubmissionReviewService {
               s.created_at AS "createdAt"
             ${baseSql}
             ORDER BY s.created_at DESC, s.id DESC
-            LIMIT $6 OFFSET $7
+            LIMIT $8 OFFSET $9
           `,
         [...params, limit, (page - 1) * limit],
       ),
@@ -860,7 +907,7 @@ export class FileSubmissionReviewService {
           ORDER BY s.id DESC
           LIMIT 30
         `,
-        [user.role, user.sub, id]
+      [user.role, user.sub, id],
     );
 
     const related: Array<{
@@ -906,5 +953,36 @@ export class FileSubmissionReviewService {
         'Chỉ kiểm tra tối đa 30 file gần nhất có quyền truy cập. ' +
         'Kết quả không đảm bảo đầy đủ lịch sử.',
     };
+  }
+
+  async organizationOptions(user: AuthUser) {
+    this.assertRole(user);
+
+    const [trainingSchools, examinationCenters] = await Promise.all([
+      this.db.query(
+        `
+          SELECT DISTINCT ts.id, ts.code, ts.name
+          FROM file_submissions s
+          JOIN training_schools ts
+            ON ts.id = s.training_school_id
+          WHERE ${this.visibleCondition()}
+          ORDER BY ts.name ASC, ts.id ASC
+        `,
+        [user.role, user.sub],
+      ),
+      this.db.query(
+        `
+          SELECT DISTINCT ec.id, ec.code, ec.name
+          FROM file_submissions s
+          JOIN examination_centers ec
+            ON ec.id = s.examination_center_id
+          WHERE ${this.visibleCondition()}
+          ORDER BY ec.name ASC, ec.id ASC
+        `,
+        [user.role, user.sub],
+      ),
+    ]);
+
+    return { trainingSchools, examinationCenters };
   }
 }

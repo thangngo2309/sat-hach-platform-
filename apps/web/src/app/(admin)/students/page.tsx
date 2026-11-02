@@ -33,6 +33,7 @@ import {
   AddOutlined,
   CloseOutlined,
   EditOutlined,
+  FilePresentOutlined,
   RefreshOutlined,
   SearchOutlined,
   VisibilityOutlined,
@@ -59,6 +60,7 @@ import {
 import type { StudentFormData } from "@/lib/student-management";
 import { API_URL } from "@/lib/auth";
 import { StudentPdfActions } from "@/components/students/StudentPdfActions";
+import { StudentScanDialog } from "@/components/students/StudentScanDialog";
 
 type Bc2Status = "all" | "has_bc2" | "no_bc2";
 
@@ -294,6 +296,7 @@ function StudentTable({
   showIntakeUser,
   onEdit,
   onDetail,
+  onScan,
 }: {
   students: StudentRow[];
   loading: boolean;
@@ -301,6 +304,7 @@ function StudentTable({
   showIntakeUser: boolean;
   onEdit: (id: number) => void;
   onDetail: (id: number) => void;
+  onScan: (student: StudentRow) => void;
 }) {
   return (
     <TableContainer
@@ -361,6 +365,8 @@ function StudentTable({
 
             const canEdit =
               !hasBc2 && (!isSystemAdmin || student.sourceType === "manual");
+
+            const canManageScan = Boolean(student.intakeUser);
 
             return (
               <TableRow key={student.id} hover>
@@ -567,6 +573,20 @@ function StudentTable({
                     />
                   )}
                   <Stack sx={{ spacing: 0.5, alignItems: "flex-end" }}>
+                    {canManageScan && (
+                      <Button
+                        size="small"
+                        color="primary"
+                        startIcon={<FilePresentOutlined fontSize="small" />}
+                        onClick={() => onScan(student)}
+                        sx={{
+                          minWidth: 110,
+                          textTransform: "none",
+                        }}
+                      >
+                        Hồ sơ scan
+                      </Button>
+                    )}
                     <Button
                       size="small"
                       startIcon={<VisibilityOutlined fontSize="small" />}
@@ -743,9 +763,14 @@ function StudentDetailContent({
 
   const documentLabels: Record<string, string> = {
     health_certificate: "Giấy chứng nhận sức khỏe",
-    driving_experience: "Giấy xác nhận quá trình lái xe",
-    diploma: "Bản sao văn bằng",
+    driving_experience: "Bản khai thời gian và số km lái xe an toàn",
+    diploma: "Bản sao văn bằng, chứng chỉ",
     current_license_copy: "Bản sao GPLX hiện có",
+    training_completion_certificate: "Giấy xác nhận hoàn thành khóa đào tạo",
+    driving_license: "Giấy phép lái xe",
+    exam_result_summary: "Biên bản tổng hợp kết quả sát hạch",
+    photo_3x4: "Ảnh thẻ 3x4",
+    other: "Giấy tờ khác",
   };
 
   return (
@@ -1315,6 +1340,8 @@ export default function StudentsPage() {
   const [error, setError] = useState("");
 
   const [selectedId, setSelectedId] = useState<number | null>(null);
+
+  const [scanStudent, setScanStudent] = useState<StudentRow | null>(null);
 
   const [selectedSchoolId, setSelectedSchoolId] = useState(schoolId);
 
@@ -2041,6 +2068,7 @@ export default function StudentsPage() {
             showIntakeUser={isSuperAdmin}
             onEdit={(id) => void openEditStudent(id)}
             onDetail={setSelectedId}
+            onScan={setScanStudent}
           />
         )}
 
@@ -2143,6 +2171,15 @@ export default function StudentsPage() {
           setFormOpen(false);
           setEditingStudent(null);
           setSelectedId(null);
+          setReload((current) => current + 1);
+        }}
+      />
+      <StudentScanDialog
+        open={scanStudent !== null}
+        studentId={scanStudent?.id ?? null}
+        studentName={scanStudent?.fullName}
+        onClose={() => setScanStudent(null)}
+        onChanged={() => {
           setReload((current) => current + 1);
         }}
       />

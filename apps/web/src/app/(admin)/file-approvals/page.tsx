@@ -26,13 +26,16 @@ import {
 } from "@mui/material";
 
 import {
+  CancelOutlined,
   CheckCircleOutlineOutlined,
   DownloadOutlined,
   RefreshOutlined,
-  CancelOutlined,
+  VisibilityOutlined,
 } from "@mui/icons-material";
 
 import { useAuth } from "@/components/auth/AuthProvider";
+
+import { describeMetadata } from "@/lib/file-document-metadata";
 
 import {
   downloadFileSubmission,
@@ -42,8 +45,8 @@ import {
   listFileSubmissions,
   reviewFileSubmission,
   STATUS_LABELS,
-  type FileSubmission,
   type FileImportState,
+  type FileSubmission,
   type SubmissionStatus,
 } from "@/lib/file-submissions";
 
@@ -53,7 +56,9 @@ const IMPORT_FILE_TYPES = new Set(["bc1", "bc2", "exam_48", "exam_result"]);
 
 function formatDate(value: string | null): string {
   if (!value) return "—";
+
   const date = new Date(value);
+
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString("vi-VN");
 }
 
@@ -64,9 +69,8 @@ function summarizeResult(
 
   const items: string[] = [];
 
-  const sessionCode = result.sessionCode;
-  if (sessionCode) {
-    items.push(`Kỳ sát hạch: ${String(sessionCode)}`);
+  if (result.sessionCode) {
+    items.push(`Kỳ sát hạch: ${String(result.sessionCode)}`);
   }
 
   const numericLabels: Array<[string, string]> = [
@@ -115,7 +119,10 @@ export default function FileApprovalsPage() {
   const [reload, setReload] = useState(0);
 
   const [rejecting, setRejecting] = useState<FileSubmission | null>(null);
+
   const [reason, setReason] = useState("");
+
+  const [viewing, setViewing] = useState<FileSubmission | null>(null);
 
   const load = useCallback(async () => {
     if (!accessToken || user?.role !== "super_admin") {
@@ -133,8 +140,8 @@ export default function FileApprovalsPage() {
 
       const allStates: FileImportState[] = [];
 
-      for (let i = 0; i < list.length; i += 100) {
-        const ids = list.slice(i, i + 100).map((item) => item.id);
+      for (let index = 0; index < list.length; index += 100) {
+        const ids = list.slice(index, index + 100).map((item) => item.id);
 
         if (ids.length) {
           const batch = await getFileImportStates(accessToken, ids);
@@ -191,12 +198,12 @@ export default function FileApprovalsPage() {
       } else {
         setSuccess(
           `Đã phê duyệt hồ sơ #${file.id}. ` +
-            "File đã được lưu và có thể phân phối; " +
-            "chưa cập nhật DB nghiệp vụ."
+            "File đã được lưu để xử lý hoặc phân phối."
         );
       }
 
       setRejecting(null);
+      setViewing(null);
       setReason("");
       setReload((value) => value + 1);
     } catch (err) {
@@ -230,14 +237,15 @@ export default function FileApprovalsPage() {
         </Typography>
 
         <Typography color="text.secondary">
-          Duyệt BC1, BC2, danh sách dự sát hạch 48_ và kết quả sát hạch KQSH.
+          Kiểm tra thông tin khai báo, duyệt BC1, BC2, danh sách dự sát hạch 48_
+          và KQSH.
         </Typography>
       </Box>
 
       <Alert severity="info">
-        BC1, BC2, file 48_ và KQSH sẽ được import khi duyệt. File kết quả BC2 do
-        PC08 gửi hiện được phê duyệt để phân phối cho CSĐT; chưa có chức năng
-        import kết quả BC2 này.
+        BC1, BC2, file 48_ và KQSH được xử lý import khi duyệt theo nghiệp vụ
+        hiện tại. File kết quả BC2 từ PC08 chỉ được duyệt để phân phối, chưa
+        import dữ liệu chính.
       </Alert>
 
       {error && (
@@ -254,7 +262,10 @@ export default function FileApprovalsPage() {
 
       <Card variant="outlined" sx={{ p: 2, borderRadius: 3 }}>
         <Stack
-          direction={{ xs: "column", sm: "row" }}
+          direction={{
+            xs: "column",
+            sm: "row",
+          }}
           sx={{
             spacing: 1.5,
             alignItems: {
@@ -272,8 +283,11 @@ export default function FileApprovalsPage() {
             sx={{ minWidth: 210 }}
           >
             <MenuItem value="pending">Chờ duyệt</MenuItem>
+
             <MenuItem value="approved">Đã duyệt</MenuItem>
+
             <MenuItem value="rejected">Từ chối</MenuItem>
+
             <MenuItem value="all">Tất cả</MenuItem>
           </TextField>
 
@@ -298,12 +312,13 @@ export default function FileApprovalsPage() {
         }}
       >
         <TableContainer>
-          <Table size="small" sx={{ minWidth: 1180 }}>
+          <Table size="small" sx={{ minWidth: 1250 }}>
             <TableHead>
               <TableRow>
                 <TableCell>File</TableCell>
                 <TableCell>Loại hồ sơ</TableCell>
                 <TableCell>Đơn vị</TableCell>
+                <TableCell>Thông tin khai báo</TableCell>
                 <TableCell>Trạng thái</TableCell>
                 <TableCell>Import</TableCell>
                 <TableCell>Ngày gửi</TableCell>
@@ -314,11 +329,17 @@ export default function FileApprovalsPage() {
             <TableBody>
               {files.map((item) => {
                 const state = states[item.id];
+
                 const importStatus = state?.importStatus ?? item.importStatus;
 
                 const busy = savingId !== null || item.status === "processing";
 
                 const requiresImport = IMPORT_FILE_TYPES.has(item.fileType);
+
+                const metadataLines = describeMetadata(
+                  item.fileType,
+                  item.documentMetadata
+                );
 
                 return (
                   <TableRow key={item.id} hover>
@@ -333,11 +354,7 @@ export default function FileApprovalsPage() {
                         {item.originalName}
                       </Typography>
 
-                      <Typography
-                        variant="caption"
-                        color="text.secondary"
-                        sx={{ display: "block" }}
-                      >
+                      <Typography variant="caption" color="text.secondary">
                         #{item.id} · Phiên bản {item.currentVersion}
                       </Typography>
                     </TableCell>
@@ -354,6 +371,38 @@ export default function FileApprovalsPage() {
                       <Typography variant="caption" color="text.secondary">
                         {item.uploaderName}
                       </Typography>
+                    </TableCell>
+
+                    <TableCell>
+                      {metadataLines.length ? (
+                        <Stack spacing={0.5}>
+                          {metadataLines.slice(0, 2).map((line, index) => (
+                            <Typography
+                              key={index}
+                              variant="caption"
+                              sx={{
+                                display: "block",
+                                overflowWrap: "anywhere",
+                              }}
+                            >
+                              {line}
+                            </Typography>
+                          ))}
+
+                          {metadataLines.length > 2 && (
+                            <Typography
+                              variant="caption"
+                              color="text.secondary"
+                            >
+                              +{metadataLines.length - 2} thông tin
+                            </Typography>
+                          )}
+                        </Stack>
+                      ) : (
+                        <Typography variant="caption" color="text.secondary">
+                          Chưa khai báo
+                        </Typography>
+                      )}
                     </TableCell>
 
                     <TableCell>
@@ -387,7 +436,11 @@ export default function FileApprovalsPage() {
                             size="small"
                             variant="outlined"
                             color={importColor(importStatus)}
-                            label={IMPORT_STATUS_LABELS[importStatus]}
+                            label={
+                              IMPORT_STATUS_LABELS[
+                                importStatus as keyof typeof IMPORT_STATUS_LABELS
+                              ] ?? importStatus
+                            }
                           />
 
                           {state?.importBatchId && (
@@ -438,6 +491,15 @@ export default function FileApprovalsPage() {
                         <Button
                           size="small"
                           disabled={busy}
+                          startIcon={<VisibilityOutlined />}
+                          onClick={() => setViewing(item)}
+                        >
+                          Thông tin
+                        </Button>
+
+                        <Button
+                          size="small"
+                          disabled={busy}
                           startIcon={<DownloadOutlined />}
                           onClick={() => void download(item)}
                         >
@@ -484,7 +546,7 @@ export default function FileApprovalsPage() {
 
               {!loading && files.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={7} align="center" sx={{ py: 6 }}>
+                  <TableCell colSpan={8} align="center" sx={{ py: 6 }}>
                     Không có hồ sơ phù hợp.
                   </TableCell>
                 </TableRow>
@@ -495,12 +557,87 @@ export default function FileApprovalsPage() {
       </Card>
 
       <Dialog
-        open={Boolean(rejecting)}
-        onClose={() => {
-          if (savingId === null) setRejecting(null);
-        }}
-        maxWidth="sm"
+        open={viewing !== null}
+        onClose={() => setViewing(null)}
         fullWidth
+        maxWidth="sm"
+      >
+        <DialogTitle component="div">
+          <Typography variant="h6" sx={{ fontWeight: 700 }}>
+            Thông tin hồ sơ #{viewing?.id}
+          </Typography>
+        </DialogTitle>
+
+        <DialogContent dividers>
+          {viewing && (
+            <Stack spacing={2}>
+              <Typography sx={{ fontWeight: 700 }}>
+                {viewing.originalName}
+              </Typography>
+
+              <Typography variant="body2" color="text.secondary">
+                {FILE_TYPE_LABELS[viewing.fileType]}
+                {" · "}
+                Phiên bản {viewing.currentVersion}
+              </Typography>
+
+              <Typography variant="body2" color="text.secondary">
+                Người gửi: {viewing.uploaderName}
+              </Typography>
+
+              <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
+                Thông tin người gửi khai báo
+              </Typography>
+
+              {describeMetadata(viewing.fileType, viewing.documentMetadata)
+                .length ? (
+                <Stack spacing={1}>
+                  {describeMetadata(
+                    viewing.fileType,
+                    viewing.documentMetadata
+                  ).map((line, index) => (
+                    <Typography key={index} variant="body2">
+                      {line}
+                    </Typography>
+                  ))}
+                </Stack>
+              ) : (
+                <Alert severity="info">
+                  File này chưa có thông tin nghiệp vụ khai báo bổ sung.
+                </Alert>
+              )}
+
+              {viewing.note && (
+                <Typography variant="body2">Ghi chú: {viewing.note}</Typography>
+              )}
+            </Stack>
+          )}
+        </DialogContent>
+
+        <DialogActions>
+          <Button onClick={() => setViewing(null)}>Đóng</Button>
+
+          {viewing && viewing.status === "pending" && (
+            <Button
+              variant="contained"
+              disabled={savingId !== null}
+              onClick={() => void review(viewing, "approve")}
+            >
+              Phê duyệt
+            </Button>
+          )}
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={rejecting !== null}
+        onClose={() => {
+          if (savingId === null) {
+            setRejecting(null);
+          }
+        }}
+        fullWidth
+        maxWidth="sm"
       >
         <DialogTitle component="div">
           <Typography variant="h6" sx={{ fontWeight: 700 }}>

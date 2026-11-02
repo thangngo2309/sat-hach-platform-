@@ -36,6 +36,9 @@ export interface IndependentAssignment {
   status: "assigned" | "cancelled";
   createdAt: string;
   updatedAt: string;
+  cancellationReason?: string | null;
+  cancelledByName?: string | null;
+  cancelledAt?: string | null;
 }
 
 export interface StudentIntakeRecord {
@@ -67,6 +70,9 @@ export interface IndependentAssignmentDetail {
   dateOfBirth: string | null;
   permanentAddress: string | null;
   currentAddress: string | null;
+  cancellationReason?: string | null;
+  cancelledByName?: string | null;
+  cancelledAt?: string | null;
   intakes: StudentIntakeRecord[];
 }
 
@@ -169,10 +175,23 @@ export function getIndependentAssignmentDetail(token: string, id: number) {
   );
 }
 
-export function cancelIndependentAssignment(token: string, id: number) {
-  return apiRequest<{ id: number; status: "cancelled" }>(
+export function cancelIndependentAssignment(
+  token: string,
+  id: number,
+  reason: string
+) {
+  return apiRequest<{
+    id: number;
+    status: "cancelled";
+    cancellationReason: string;
+  }>(
     `${BASE}/${id}/cancel`,
-    { method: "POST" },
+    {
+      method: "POST",
+      body: JSON.stringify({
+        reason: reason.trim(),
+      }),
+    },
     token
   );
 }

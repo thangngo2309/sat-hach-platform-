@@ -53,6 +53,8 @@ export class FileSubmissionReviewController {
     @Query('search') search?: string,
     @Query('fileType') fileType?: string,
     @Query('status') status?: string,
+    @Query('trainingSchoolId') trainingSchoolId?: string,
+    @Query('examinationCenterId') examinationCenterId?: string,
   ) {
     return this.service.list(user, {
       page,
@@ -60,7 +62,14 @@ export class FileSubmissionReviewController {
       search,
       fileType,
       status,
+      trainingSchoolId,
+      examinationCenterId,
     });
+  }
+
+  @Get('options')
+  options(@CurrentUser() user: AuthUser) {
+    return this.service.organizationOptions(user);
   }
 
   @Get(':id/overview')

@@ -453,10 +453,32 @@ export class IndependentExamAssignmentService {
     const params = [status, date, search, isSuperAdmin, user.sub, secretaryId];
 
     const from = `
-        FROM independent_exam_assignments a
-        JOIN students s ON s.id = a.student_id
-        JOIN users secretary ON secretary.id = a.secretary_user_id
-        JOIN users assigner ON assigner.id = a.assigned_by_user_id
+      FROM independent_exam_assignments a
+
+      JOIN students s
+        ON s.id = a.student_id
+
+      JOIN users secretary
+        ON secretary.id = a.secretary_user_id
+
+      JOIN users assigner
+        ON assigner.id = a.assigned_by_user_id
+
+      LEFT JOIN LATERAL (
+        SELECT
+          e.detail,
+          e.created_at,
+          e.actor_user_id
+        FROM independent_exam_assignment_events e
+        WHERE e.assignment_id = a.id
+          AND e.action = 'cancelled'
+        ORDER BY e.created_at DESC, e.id DESC
+        LIMIT 1
+      ) cancel_event
+        ON a.status = 'cancelled'
+
+      LEFT JOIN users cancel_actor
+        ON cancel_actor.id = cancel_event.actor_user_id
       `;
 
     const [countRows, rows] = await Promise.all([
@@ -478,7 +500,10 @@ export class IndependentExamAssignmentService {
               secretary.full_name AS "secretaryName",
               assigner.full_name AS "assignedByName",
               a.created_at AS "createdAt",
-              a.updated_at AS "updatedAt"
+              a.updated_at AS "updatedAt",
+              cancel_event.detail->>'reason' AS "cancellationReason",
+              cancel_actor.full_name AS "cancelledByName",
+              cancel_event.created_at AS "cancelledAt"
             ${from}
             ${where}
             ORDER BY a.exam_date DESC, a.id DESC
@@ -579,19 +604,31 @@ export class IndependentExamAssignmentService {
     };
   }
 
-  async cancel(user: AuthUser, id: number) {
+  async cancel(user: AuthUser, id: number, reasonInput?: string) {
     this.assertSuperAdmin(user);
 
     const assignmentId = positiveId(id, 'ID phân công');
 
+    if (typeof reasonInput !== 'string' || !reasonInput.trim()) {
+      throw new BadRequestException('Vui lòng nhập lý do hủy phân công.');
+    }
+
+    const reason = reasonInput.normalize('NFC').trim();
+
+    if (reason.length > 2000) {
+      throw new BadRequestException(
+        'Lý do hủy không được vượt quá 2000 ký tự.',
+      );
+    }
+
     await this.db.transaction(async (manager) => {
       const rows: Array<{ status: string }> = await manager.query(
         `
-              SELECT status
-              FROM independent_exam_assignments
-              WHERE id = $1
-              FOR UPDATE
-            `,
+            SELECT status
+            FROM independent_exam_assignments
+            WHERE id = $1
+            FOR UPDATE
+          `,
         [assignmentId],
       );
 
@@ -605,20 +642,23 @@ export class IndependentExamAssignmentService {
 
       await manager.query(
         `
-            UPDATE independent_exam_assignments
-            SET status = 'cancelled',
-                updated_at = NOW()
-            WHERE id = $1
-          `,
+          UPDATE independent_exam_assignments
+          SET status = 'cancelled',
+              updated_at = NOW()
+          WHERE id = $1
+        `,
         [assignmentId],
       );
 
-      await this.event(manager, assignmentId, user.sub, 'cancelled', {});
+      await this.event(manager, assignmentId, user.sub, 'cancelled', {
+        reason,
+      });
     });
 
     return {
       id: assignmentId,
       status: 'cancelled',
+      cancellationReason: reason,
     };
   }
 

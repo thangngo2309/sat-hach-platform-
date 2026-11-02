@@ -71,7 +71,11 @@ export class IndependentExamAssignmentController {
 
   @Post(':id/cancel')
   @Roles(UserRole.SUPER_ADMIN)
-  cancel(@CurrentUser() user: AuthUser, @Param('id', ParseIntPipe) id: number) {
-    return this.service.cancel(user, id);
+  cancel(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: { reason?: string },
+  ) {
+    return this.service.cancel(user, id, body?.reason);
   }
 }

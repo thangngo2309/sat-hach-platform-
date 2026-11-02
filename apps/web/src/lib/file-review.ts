@@ -123,6 +123,8 @@ export function listReviewFiles(
     search?: string;
     fileType?: string;
     status?: string;
+    trainingSchoolId?: number;
+    examinationCenterId?: number;
   } = {}
 ) {
   return apiRequest<Paged<ReviewFile>>(
@@ -167,6 +169,25 @@ export function getRelatedReviewFiles(
     `/file-review/${id}/related-files${queryString({
       registrationCode,
     })}`,
+    { method: "GET" },
+    token
+  );
+}
+
+export interface ReviewOrganizationOption {
+  id: number;
+  code: string;
+  name: string;
+}
+
+export interface ReviewOrganizationOptions {
+  trainingSchools: ReviewOrganizationOption[];
+  examinationCenters: ReviewOrganizationOption[];
+}
+
+export function getReviewOrganizationOptions(token: string) {
+  return apiRequest<ReviewOrganizationOptions>(
+    "/file-review/options",
     { method: "GET" },
     token
   );

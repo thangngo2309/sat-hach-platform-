@@ -72,6 +72,203 @@ function shortDate(date: string) {
   return parts.length === 3 ? `${parts[2]}/${parts[1]}/${parts[0]}` : date;
 }
 
+const DOCUMENT_LABELS: Record<string, string> = {
+  health_certificate: "Giấy chứng nhận sức khỏe",
+  driving_experience: "Bản khai thời gian và số km lái xe an toàn",
+  diploma: "Bản sao văn bằng, chứng chỉ",
+  current_license_copy: "Bản sao GPLX hiện có",
+  training_completion_certificate: "Giấy xác nhận hoàn thành khóa đào tạo",
+  exam_result_summary: "Biên bản tổng hợp kết quả sát hạch",
+  photo_3x4: "Ảnh thẻ 3x4",
+  other: "Giấy tờ khác",
+};
+
+type IntakeDocument = {
+  type: string;
+  checked: boolean;
+  note?: string;
+};
+
+function parseIntakeDocuments(value: unknown): IntakeDocument[] {
+  let parsed: unknown = value;
+
+  if (typeof parsed === "string") {
+    try {
+      parsed = JSON.parse(parsed);
+    } catch {
+      return [];
+    }
+  }
+
+  if (!Array.isArray(parsed)) return [];
+
+  return parsed.filter(
+    (item): item is IntakeDocument =>
+      typeof item === "object" &&
+      item !== null &&
+      typeof item.type === "string" &&
+      typeof item.checked === "boolean"
+  );
+}
+
+function IntakeDocuments({ documents }: { documents: unknown }) {
+  const items = parseIntakeDocuments(documents);
+
+  if (!items.length) {
+    return (
+      <Typography variant="body2" color="text.secondary">
+        Chưa khai báo thành phần giấy tờ.
+      </Typography>
+    );
+  }
+
+  return (
+    <Stack spacing={1}>
+      {items.map((item, index) => (
+        <Stack
+          key={`${item.type}-${index}`}
+          direction={{ xs: "column", sm: "row" }}
+          sx={{
+            border: "1px solid",
+            borderColor: "divider",
+            borderRadius: 1.5,
+            px: 1.5,
+            py: 1,
+            spacing: 1,
+            alignItems: { xs: "flex-start", sm: "center" },
+            justifyContent: "space-between",
+          }}
+        >
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <Typography variant="body2" sx={{ fontWeight: 600 }}>
+              {DOCUMENT_LABELS[item.type] ?? item.type}
+            </Typography>
+
+            {item.note?.trim() && (
+              <Typography variant="caption" color="text.secondary">
+                Ghi chú: {item.note}
+              </Typography>
+            )}
+          </Box>
+
+          <Chip
+            size="small"
+            variant="outlined"
+            color={item.checked ? "success" : "default"}
+            label={item.checked ? "Đã có" : "Chưa có"}
+          />
+        </Stack>
+      ))}
+    </Stack>
+  );
+}
+
+type ExistingLicense = {
+  number: string;
+  licenseClass: string;
+  issuedDate: string;
+  issuedBy: string;
+};
+
+function parseExistingLicenses(value: unknown): ExistingLicense[] {
+  let parsed: unknown = value;
+
+  if (typeof parsed === "string") {
+    try {
+      parsed = JSON.parse(parsed);
+    } catch {
+      return [];
+    }
+  }
+
+  if (!Array.isArray(parsed)) return [];
+
+  return parsed.filter(
+    (item): item is ExistingLicense =>
+      typeof item === "object" &&
+      item !== null &&
+      typeof item.number === "string"
+  );
+}
+
+function formatLicenseDate(value: string): string {
+  if (!value) return "—";
+
+  const date = value.slice(0, 10);
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
+
+  return match ? `${match[3]}/${match[2]}/${match[1]}` : date;
+}
+
+function IntakeExistingLicenses({ licenses }: { licenses: unknown }) {
+  const items = parseExistingLicenses(licenses);
+
+  if (!items.length) {
+    return (
+      <Typography variant="body2" color="text.secondary">
+        Chưa có thông tin giấy phép lái xe.
+      </Typography>
+    );
+  }
+
+  return (
+    <Stack spacing={1.5}>
+      {items.map((license, index) => (
+        <Card
+          key={`${license.number}-${index}`}
+          variant="outlined"
+          sx={{
+            p: 2,
+            borderRadius: 2,
+          }}
+        >
+          <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1.5 }}>
+            Giấy phép lái xe {index + 1}
+          </Typography>
+
+          <Box
+            sx={{
+              display: "grid",
+              gridTemplateColumns: {
+                xs: "1fr",
+                sm: "repeat(2, minmax(0, 1fr))",
+              },
+              gap: 2,
+            }}
+          >
+            {[
+              ["Số GPLX", license.number],
+              ["Hạng GPLX", license.licenseClass],
+              ["Ngày cấp", formatLicenseDate(license.issuedDate)],
+              ["Nơi cấp", license.issuedBy],
+            ].map(([label, value]) => (
+              <Box key={label}>
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  sx={{ display: "block", mb: 0.25 }}
+                >
+                  {label}
+                </Typography>
+
+                <Typography
+                  variant="body2"
+                  sx={{
+                    fontWeight: 600,
+                    overflowWrap: "anywhere",
+                  }}
+                >
+                  {value || "—"}
+                </Typography>
+              </Box>
+            ))}
+          </Box>
+        </Card>
+      ))}
+    </Stack>
+  );
+}
+
 export function IndependentExamWorkspace() {
   const { user, accessToken } = useAuth();
 
@@ -101,6 +298,11 @@ export function IndependentExamWorkspace() {
   const [filterDate, setFilterDate] = useState("");
   const [filterSecretary, setFilterSecretary] = useState("");
   const [showCancelled, setShowCancelled] = useState(false);
+
+  const [cancelTarget, setCancelTarget] =
+    useState<IndependentAssignment | null>(null);
+
+  const [cancelReason, setCancelReason] = useState("");
 
   const [detail, setDetail] = useState<IndependentAssignmentDetail | null>(
     null
@@ -270,10 +472,20 @@ export function IndependentExamWorkspace() {
     }
   }
 
-  async function cancel(id: number) {
-    if (!accessToken || !isSuperAdmin || saving) return;
+  async function confirmCancel() {
+    if (!accessToken || !isSuperAdmin || !cancelTarget || saving) {
+      return;
+    }
 
-    if (!window.confirm("Bạn có chắc muốn hủy phân công này?")) {
+    const reason = cancelReason.trim();
+
+    if (!reason) {
+      setError("Vui lòng nhập lý do hủy phân công.");
+      return;
+    }
+
+    if (reason.length > 2000) {
+      setError("Lý do hủy không được vượt quá 2000 ký tự.");
       return;
     }
 
@@ -281,8 +493,12 @@ export function IndependentExamWorkspace() {
     setError("");
 
     try {
-      await cancelIndependentAssignment(accessToken, id);
-      setSuccess(`Đã hủy phân công #${id}.`);
+      await cancelIndependentAssignment(accessToken, cancelTarget.id, reason);
+
+      setSuccess(`Đã hủy phân công của ${cancelTarget.fullName}.`);
+
+      setCancelTarget(null);
+      setCancelReason("");
       setReload((value) => value + 1);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Không thể hủy phân công.");
@@ -632,6 +848,7 @@ export function IndependentExamWorkspace() {
                 <TableCell>Mã kỳ</TableCell>
                 <TableCell>Thư ký</TableCell>
                 <TableCell>Trạng thái</TableCell>
+                <TableCell>Lý do hủy</TableCell>
                 <TableCell align="right">Thao tác</TableCell>
               </TableRow>
             </TableHead>
@@ -660,6 +877,32 @@ export function IndependentExamWorkspace() {
                       }
                     />
                   </TableCell>
+                  <TableCell>
+                    {item.status === "cancelled" ? (
+                      <Stack spacing={0.5}>
+                        <Typography
+                          variant="body2"
+                          sx={{ overflowWrap: "anywhere" }}
+                        >
+                          {item.cancellationReason || "Không có lý do"}
+                        </Typography>
+
+                        {item.cancelledByName && (
+                          <Typography variant="caption" color="text.secondary">
+                            Người hủy: {item.cancelledByName}
+                          </Typography>
+                        )}
+
+                        {item.cancelledAt && (
+                          <Typography variant="caption" color="text.secondary">
+                            {new Date(item.cancelledAt).toLocaleString("vi-VN")}
+                          </Typography>
+                        )}
+                      </Stack>
+                    ) : (
+                      "—"
+                    )}
+                  </TableCell>
                   <TableCell align="right">
                     <Stack
                       direction="row"
@@ -680,7 +923,11 @@ export function IndependentExamWorkspace() {
                           color="error"
                           startIcon={<CancelOutlined />}
                           disabled={saving}
-                          onClick={() => void cancel(item.id)}
+                          onClick={() => {
+                            setCancelTarget(item);
+                            setCancelReason("");
+                            setError("");
+                          }}
                         >
                           Hủy
                         </Button>
@@ -803,41 +1050,19 @@ export function IndependentExamWorkspace() {
                       Ghi chú: {showValue(intake.note)}
                     </Typography>
 
-                    <Typography variant="body2" sx={{ fontWeight: 700 }}>
+                    <Typography variant="body2" sx={{ fontWeight: 700, mt: 1 }}>
                       Thành phần giấy tờ
                     </Typography>
-                    <Box
-                      component="pre"
-                      sx={{
-                        m: 0,
-                        p: 1.5,
-                        bgcolor: "action.hover",
-                        borderRadius: 1,
-                        fontSize: 12,
-                        whiteSpace: "pre-wrap",
-                        overflowWrap: "anywhere",
-                      }}
-                    >
-                      {showValue(intake.documents)}
-                    </Box>
 
-                    <Typography variant="body2" sx={{ fontWeight: 700 }}>
+                    <IntakeDocuments documents={intake.documents} />
+
+                    <Typography variant="body2" sx={{ fontWeight: 700, mt: 1 }}>
                       Giấy phép lái xe đã có
                     </Typography>
-                    <Box
-                      component="pre"
-                      sx={{
-                        m: 0,
-                        p: 1.5,
-                        bgcolor: "action.hover",
-                        borderRadius: 1,
-                        fontSize: 12,
-                        whiteSpace: "pre-wrap",
-                        overflowWrap: "anywhere",
-                      }}
-                    >
-                      {showValue(intake.existingLicenses)}
-                    </Box>
+
+                    <IntakeExistingLicenses
+                      licenses={intake.existingLicenses}
+                    />
                   </Stack>
                 </Card>
               ))}
@@ -853,6 +1078,89 @@ export function IndependentExamWorkspace() {
 
         <DialogActions>
           <Button onClick={() => setDetail(null)}>Đóng</Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={cancelTarget !== null}
+        onClose={() => {
+          if (!saving) {
+            setCancelTarget(null);
+            setCancelReason("");
+          }
+        }}
+        fullWidth
+        maxWidth="sm"
+      >
+        <DialogTitle component="div">
+          <Typography variant="h6" sx={{ fontWeight: 700 }}>
+            Hủy phân công thí sinh
+          </Typography>
+        </DialogTitle>
+
+        <DialogContent dividers>
+          <Stack spacing={2}>
+            <Alert severity="warning">
+              Việc hủy phân công sẽ được ghi nhận vào lịch sử hệ thống.
+            </Alert>
+
+            {cancelTarget && (
+              <Box>
+                <Typography variant="body2">
+                  Thí sinh: <strong>{cancelTarget.fullName}</strong>
+                </Typography>
+
+                <Typography variant="body2">
+                  Ngày thi: {shortDate(cancelTarget.examDate)}
+                </Typography>
+
+                <Typography variant="body2">
+                  Thư ký: {cancelTarget.secretaryName}
+                </Typography>
+              </Box>
+            )}
+
+            <TextField
+              autoFocus
+              required
+              fullWidth
+              multiline
+              minRows={3}
+              maxRows={6}
+              label="Lý do hủy phân công"
+              placeholder="Nhập lý do hủy..."
+              value={cancelReason}
+              disabled={saving}
+              onChange={(event) => setCancelReason(event.target.value)}
+              error={cancelReason.length > 2000}
+              helperText={`${cancelReason.length}/2000 ký tự`}
+            />
+          </Stack>
+        </DialogContent>
+
+        <DialogActions>
+          <Button
+            disabled={saving}
+            onClick={() => {
+              setCancelTarget(null);
+              setCancelReason("");
+            }}
+          >
+            Đóng
+          </Button>
+
+          <Button
+            variant="contained"
+            color="error"
+            disabled={
+              saving ||
+              !cancelReason.trim() ||
+              cancelReason.trim().length > 2000
+            }
+            onClick={() => void confirmCancel()}
+          >
+            {saving ? "Đang hủy..." : "Xác nhận hủy"}
+          </Button>
         </DialogActions>
       </Dialog>
     </Stack>

@@ -40,6 +40,8 @@ import {
   getReviewCandidates,
   getReviewOverview,
   listReviewFiles,
+  getReviewOrganizationOptions,
+  type ReviewOrganizationOptions,
   type MatchStatus,
   type RelatedFile,
   type ReviewCandidate,
@@ -124,6 +126,16 @@ export function FileReviewWorkspace() {
   const [search, setSearch] = useState("");
   const [fileType, setFileType] = useState("");
   const [status, setStatus] = useState("");
+  const [trainingSchoolId, setTrainingSchoolId] = useState("");
+  const [examinationCenterId, setExaminationCenterId] = useState("");
+
+  const [organizations, setOrganizations] = useState<ReviewOrganizationOptions>(
+    {
+      trainingSchools: [],
+      examinationCenters: [],
+    }
+  );
+
   const [reload, setReload] = useState(0);
 
   const [overview, setOverview] = useState<ReviewOverview | null>(null);
@@ -155,6 +167,30 @@ export function FileReviewWorkspace() {
     "exam_center",
   ].includes(user?.role ?? "");
 
+  useEffect(() => {
+    if (!accessToken || !authorized) return;
+
+    let active = true;
+
+    void getReviewOrganizationOptions(accessToken)
+      .then((result) => {
+        if (active) setOrganizations(result);
+      })
+      .catch((err: unknown) => {
+        if (active) {
+          setError(
+            err instanceof Error
+              ? err.message
+              : "Không tải được danh mục đơn vị."
+          );
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [accessToken, authorized]);
+
   const loadFiles = useCallback(async () => {
     if (!accessToken || !authorized) return;
 
@@ -168,6 +204,12 @@ export function FileReviewWorkspace() {
         search,
         fileType,
         status,
+        trainingSchoolId: trainingSchoolId
+          ? Number(trainingSchoolId)
+          : undefined,
+        examinationCenterId: examinationCenterId
+          ? Number(examinationCenterId)
+          : undefined,
       });
 
       setFiles(response.data);
@@ -179,7 +221,17 @@ export function FileReviewWorkspace() {
     } finally {
       setLoading(false);
     }
-  }, [accessToken, authorized, page, search, fileType, status, reload]);
+  }, [
+    accessToken,
+    authorized,
+    page,
+    search,
+    fileType,
+    status,
+    trainingSchoolId,
+    examinationCenterId,
+    reload,
+  ]);
 
   useEffect(() => {
     void loadFiles();
@@ -225,6 +277,13 @@ export function FileReviewWorkspace() {
   useEffect(() => {
     void loadReview();
   }, [loadReview]);
+
+  function searchCandidates() {
+    const keyword = candidateSearchText.trim();
+
+    setCandidatePage(1);
+    setCandidateSearch(keyword);
+  }
 
   function openReview(id: number) {
     setOverview(null);
@@ -310,35 +369,54 @@ export function FileReviewWorkspace() {
 
       <Card variant="outlined" sx={{ p: 2, borderRadius: 3 }}>
         <Stack spacing={1.5}>
-          <Stack direction={{ xs: "column", md: "row" }} spacing={1}>
+          <Stack
+            direction={{ xs: "column", md: "row" }}
+            spacing={1}
+            sx={{ alignItems: { md: "flex-start" } }}
+          >
             <TextField
-              fullWidth
               size="small"
-              placeholder="Tìm tên file, người gửi, đơn vị..."
-              value={searchText}
-              onChange={(event) => setSearchText(event.target.value)}
+              fullWidth
+              label="Tìm kiếm thí sinh"
+              placeholder="Họ tên, CCCD, mã đăng ký, số báo danh..."
+              value={candidateSearchText}
+              onChange={(event) => setCandidateSearchText(event.target.value)}
               onKeyDown={(event) => {
-                if (event.key === "Enter") searchFiles();
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  searchCandidates();
+                }
               }}
             />
 
-            <Button
-              variant="outlined"
-              startIcon={<SearchOutlined />}
-              onClick={searchFiles}
-              sx={{ whiteSpace: "nowrap", textTransform: "none" }}
+            <TextField
+              select
+              size="small"
+              label="Đối chiếu"
+              value={matchFilter}
+              onChange={(event) => {
+                setMatchFilter(event.target.value);
+                setCandidatePage(1);
+              }}
+              sx={{ minWidth: { md: 190 } }}
             >
-              Tìm kiếm
-            </Button>
+              <MenuItem value="">Tất cả</MenuItem>
+
+              {Object.entries(MATCH_LABELS).map(([key, label]) => (
+                <MenuItem key={key} value={key}>
+                  {label}
+                </MenuItem>
+              ))}
+            </TextField>
 
             <Button
-              variant="outlined"
-              startIcon={<RefreshOutlined />}
-              disabled={loading}
-              onClick={() => setReload((value) => value + 1)}
-              sx={{ whiteSpace: "nowrap", textTransform: "none" }}
+              variant="contained"
+              startIcon={<SearchOutlined />}
+              disabled={loadingReview}
+              onClick={searchCandidates}
+              sx={{ minHeight: 40, whiteSpace: "nowrap" }}
             >
-              Tải lại
+              Tìm kiếm
             </Button>
           </Stack>
 
@@ -381,6 +459,46 @@ export function FileReviewWorkspace() {
               {Object.entries(STATUS_LABELS).map(([key, label]) => (
                 <MenuItem key={key} value={key}>
                   {label}
+                </MenuItem>
+              ))}
+            </TextField>
+
+            <TextField
+              select
+              size="small"
+              label="Cơ sở đào tạo"
+              value={trainingSchoolId}
+              onChange={(event) => {
+                setTrainingSchoolId(event.target.value);
+                setPage(1);
+              }}
+              sx={{ minWidth: 240 }}
+            >
+              <MenuItem value="">Tất cả CSĐT</MenuItem>
+
+              {organizations.trainingSchools.map((school) => (
+                <MenuItem key={school.id} value={String(school.id)}>
+                  {school.code} — {school.name}
+                </MenuItem>
+              ))}
+            </TextField>
+
+            <TextField
+              select
+              size="small"
+              label="Trung tâm sát hạch"
+              value={examinationCenterId}
+              onChange={(event) => {
+                setExaminationCenterId(event.target.value);
+                setPage(1);
+              }}
+              sx={{ minWidth: 240 }}
+            >
+              <MenuItem value="">Tất cả TTSH</MenuItem>
+
+              {organizations.examinationCenters.map((center) => (
+                <MenuItem key={center.id} value={String(center.id)}>
+                  {center.code} — {center.name}
                 </MenuItem>
               ))}
             </TextField>
@@ -706,7 +824,7 @@ export function FileReviewWorkspace() {
                       </Table>
                     </TableContainer>
 
-                    <Stack
+                    {/* <Stack
                       direction="row"
                       sx={{
                         alignItems: "center",
@@ -722,7 +840,7 @@ export function FileReviewWorkspace() {
                         count={Math.max(1, Math.ceil(candidateTotal / 20))}
                         onChange={(_, value) => setCandidatePage(value)}
                       />
-                    </Stack>
+                    </Stack> */}
                   </>
                 )}
               </>
@@ -730,7 +848,36 @@ export function FileReviewWorkspace() {
           </Stack>
         </DialogContent>
 
-        <DialogActions>
+        <DialogActions
+          sx={{
+            px: 3,
+            py: 1.5,
+            gap: 2,
+            flexWrap: "wrap",
+            justifyContent: "space-between",
+            borderTop: "1px solid",
+            borderColor: "divider",
+          }}
+        >
+          <Typography variant="body2" color="text.secondary">
+            {candidateTotal.toLocaleString("vi-VN")} thí sinh
+            {" · "}
+            Trang {candidatePage}/{Math.max(1, Math.ceil(candidateTotal / 20))}
+          </Typography>
+
+          <Pagination
+            color="primary"
+            page={candidatePage}
+            count={Math.max(1, Math.ceil(candidateTotal / 20))}
+            disabled={loadingReview || !overview?.supported}
+            onChange={(_, nextPage) => {
+              setCandidatePage(nextPage);
+            }}
+            showFirstButton
+            showLastButton
+            siblingCount={1}
+          />
+
           <Button onClick={closeReview}>Đóng</Button>
         </DialogActions>
       </Dialog>

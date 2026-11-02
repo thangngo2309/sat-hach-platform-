@@ -1,6 +1,6 @@
 import { API_URL, apiRequest } from "@/lib/auth";
-
 import type { OrganizationOptions } from "@/lib/organization-accounts";
+import type { DocumentMetadata } from "./file-document-metadata";
 
 export type SubmissionFileType =
   | "bc1"
@@ -35,6 +35,7 @@ export interface FileSubmission {
   rejectionReason: string | null;
   currentVersion: number;
   importStatus: ImportStatus;
+  documentMetadata: DocumentMetadata;
   originalName: string;
   sizeBytes: string;
   createdAt: string;
@@ -60,6 +61,26 @@ export interface FileSubmissionReviewResult {
   importError?: string | null;
   importResult?: Record<string, unknown> | null;
   importBatchId?: number | null;
+}
+
+export interface ExamSessionOption {
+  id: number;
+  code: string;
+  examDate: string;
+}
+
+export interface ItOfficerOption {
+  id: number;
+  username: string;
+  fullName: string;
+}
+
+/**
+ * Chuỗi hiển thị/lưu metadata:
+ * Nguyễn Văn A (@it01)
+ */
+export function formatItOfficer(officer: ItOfficerOption): string {
+  return `${officer.fullName} (@${officer.username})`;
 }
 
 export const FILE_TYPE_LABELS: Record<SubmissionFileType, string> = {
@@ -105,11 +126,31 @@ export function getFileSubmissionOptions(token: string) {
   );
 }
 
+export function listExamSessionOptions(token: string) {
+  return apiRequest<ExamSessionOption[]>(
+    "/file-submissions/exam-sessions",
+    { method: "GET" },
+    token
+  );
+}
+
+/**
+ * Dùng tài khoản IT hiện có.
+ * Không tạo role mới.
+ */
+export function listItOfficerOptions(token: string) {
+  return apiRequest<ItOfficerOption[]>(
+    "/file-submissions/it-officers",
+    { method: "GET" },
+    token
+  );
+}
+
 export function getFileImportStates(
   token: string,
   ids: number[]
 ): Promise<FileImportState[]> {
-  if (ids.length === 0) {
+  if (!ids.length) {
     return Promise.resolve([]);
   }
 
@@ -128,6 +169,7 @@ export function uploadFileSubmission(
     trainingSchoolId?: number | null;
     examinationCenterId?: number | null;
     note?: string;
+    documentMetadata?: DocumentMetadata;
   }
 ) {
   const body = new FormData();
@@ -135,6 +177,7 @@ export function uploadFileSubmission(
   body.set("file", input.file);
   body.set("fileType", input.fileType);
   body.set("note", input.note ?? "");
+  body.set("documentMetadata", JSON.stringify(input.documentMetadata ?? {}));
 
   if (input.trainingSchoolId) {
     body.set("trainingSchoolId", String(input.trainingSchoolId));
@@ -151,9 +194,16 @@ export function uploadFileSubmission(
   );
 }
 
-export function replaceFileSubmission(token: string, id: number, file: File) {
+export function replaceFileSubmission(
+  token: string,
+  id: number,
+  file: File,
+  documentMetadata?: DocumentMetadata
+) {
   const body = new FormData();
+
   body.set("file", file);
+  body.set("documentMetadata", JSON.stringify(documentMetadata ?? {}));
 
   return apiRequest<FileSubmission>(
     `/file-submissions/${id}/replace`,
@@ -172,10 +222,7 @@ export function reviewFileSubmission(
     `/file-submissions/${id}/review`,
     {
       method: "POST",
-      body: JSON.stringify({
-        action,
-        reason,
-      }),
+      body: JSON.stringify({ action, reason }),
     },
     token
   );
@@ -189,6 +236,7 @@ export interface FileSubmissionVersion {
   mimeType: string;
   sizeBytes: string;
   sha256: string;
+  documentMetadata: DocumentMetadata;
   createdAt: string;
 }
 
