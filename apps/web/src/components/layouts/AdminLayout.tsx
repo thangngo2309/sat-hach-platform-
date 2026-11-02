@@ -44,6 +44,7 @@ import {
 import type { SvgIconComponent } from "@mui/icons-material";
 import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "@/components/auth/AuthProvider";
+import FolderOutlined from "@mui/icons-material/FolderOutlined";
 
 const DRAWER_WIDTH = 260;
 const COLLAPSED_WIDTH = 76;
@@ -135,6 +136,11 @@ const systemItems: MenuEntry[] = [
     icon: AssignmentOutlined,
     superAdminOnly: true,
   },
+  {
+    label: "Quản lý file",
+    href: "/file-review",
+    icon: FolderOutlined,
+  }
 ];
 
 const businessWorkspaceItems: MenuEntry[] = [
@@ -143,6 +149,11 @@ const businessWorkspaceItems: MenuEntry[] = [
     href: "/role-workspace",
     icon: DescriptionOutlined,
   },
+  {
+    label: "Quản lý file",
+    href: "/file-review",
+    icon: FolderOutlined,
+  }
 ];
 
 const BUSINESS_ROLES = [

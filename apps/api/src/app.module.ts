@@ -72,6 +72,8 @@ import { ExamFileApprovalService } from './business/file-submissions/exam-file-a
 import { IndependentExamAssignmentController } from './business/independent-exams/independent-exam-assignment.controller.js';
 import { IndependentExamAssignmentService } from './business/independent-exams/independent-exam-assignment.service.js';
 import { TrainingSchoolImportService } from './business/catalog/training-school-import.service.js';
+import { FileSubmissionReviewController } from './business/file-submissions/file-submission-review.controller.js';
+import { FileSubmissionReviewService } from './business/file-submissions/file-submission-review.service.js';
 
 const businessEntities = [
   User,
@@ -137,6 +139,7 @@ const businessEntities = [
     FileSubmissionsController,
     ReceivedFilesController,
     IndependentExamAssignmentController,
+    FileSubmissionReviewController
   ],
 
   providers: [
@@ -165,7 +168,8 @@ const businessEntities = [
     ReceivedFilesService,
     ExamFileApprovalService,
     IndependentExamAssignmentService,
-    TrainingSchoolImportService
+    TrainingSchoolImportService,
+    FileSubmissionReviewService
   ],
 })
 export class AppModule {}
