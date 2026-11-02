@@ -52,6 +52,8 @@ import {
   type StudentExamStatus,
   type StudentRow,
   type StudentsPageResult,
+  type SchoolOption,
+  listSchoolOptions,
 } from "@/lib/bc2-view";
 
 import type { StudentFormData } from "@/lib/student-management";
@@ -824,6 +826,7 @@ function StudentDetailContent({
           <Info label="Quốc tịch" value={detail.nationalityName} />
           <Info label="Thường trú" value={detail.permanentAddress} />
           <Info label="Nơi cư trú" value={detail.currentAddress} />
+          <Info label="Số điện thoại" value={detail.phoneNumber} />
         </Box>
       </Box>
 
@@ -916,6 +919,19 @@ function StudentDetailContent({
                     <Info
                       label="Cơ quan cấp"
                       value={intake.certificateIssuer}
+                    />
+
+                    <Info
+                      label="Số giấy xác nhận hoàn thành khóa đào tạo"
+                      value={intake.trainingCompletionNumber}
+                    />
+                    <Info
+                      label="Ngày cấp giấy xác nhận hoàn thành khóa đào tạo"
+                      value={formatDate(intake.trainingCompletionIssuedDate)}
+                    />
+                    <Info
+                      label="Nơi xác nhận hoàn thành khóa học"
+                      value={intake.trainingCompletionIssuer}
                     />
 
                     <Info
@@ -1300,6 +1316,60 @@ export default function StudentsPage() {
 
   const [selectedId, setSelectedId] = useState<number | null>(null);
 
+  const [selectedSchoolId, setSelectedSchoolId] = useState(schoolId);
+
+  const [schools, setSchools] = useState<SchoolOption[]>([]);
+
+  const [schoolsLoading, setSchoolsLoading] = useState(false);
+
+  const [schoolsError, setSchoolsError] = useState("");
+
+  useEffect(() => {
+    if (!accessToken || isSystemAdmin) {
+      setSchools([]);
+      setSchoolsLoading(false);
+      setSchoolsError("");
+      return;
+    }
+
+    let cancelled = false;
+
+    setSchoolsLoading(true);
+    setSchoolsError("");
+
+    void listSchoolOptions(accessToken)
+      .then((data) => {
+        if (!cancelled) {
+          setSchools(data);
+        }
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setSchoolsError(
+            error instanceof Error
+              ? error.message
+              : "Không thể tải danh mục cơ sở đào tạo."
+          );
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setSchoolsLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [accessToken, isSystemAdmin]);
+
+  useEffect(() => {
+    setSelectedSchoolId(schoolId);
+    setSelectedCourseId(urlCourseId);
+    setBc1Code("");
+    setPage(1);
+  }, [schoolId, urlCourseId]);
+
   useEffect(() => {
     if (!isSuperAdmin) return;
 
@@ -1325,12 +1395,6 @@ export default function StudentsPage() {
     null
   );
 
-  useEffect(() => {
-    setSelectedCourseId(urlCourseId);
-    setBc1Code("");
-    setPage(1);
-  }, [urlCourseId]);
-
   /**
    * Chỉ SUPER_ADMIN / ADMIN cần tải khóa học.
    *
@@ -1348,6 +1412,7 @@ export default function StudentsPage() {
 
     setCourseLoading(true);
     setCourseError("");
+    setCourseOptions([]);
 
     const fetchCourses = async () => {
       const collected: CourseSummary[] = [];
@@ -1359,7 +1424,7 @@ export default function StudentsPage() {
         const response = await listCourseSummaries(accessToken, {
           page: currentPage,
           limit: 100,
-          schoolId: schoolId || undefined,
+          schoolId: selectedSchoolId || undefined,
         });
 
         if (cancelled) return;
@@ -1393,7 +1458,7 @@ export default function StudentsPage() {
     return () => {
       cancelled = true;
     };
-  }, [accessToken, schoolId, isSystemAdmin]);
+  }, [accessToken, selectedSchoolId, isSystemAdmin]);
 
   const bc1Options = [
     ...new Set(
@@ -1425,7 +1490,7 @@ export default function StudentsPage() {
         limit: 20,
         search,
 
-        schoolId: isSystemAdmin ? undefined : schoolId || undefined,
+        schoolId: isSystemAdmin ? undefined : selectedSchoolId || undefined,
 
         courseId: isSystemAdmin ? undefined : selectedCourseId || undefined,
 
@@ -1499,7 +1564,7 @@ export default function StudentsPage() {
     accessToken,
     page,
     search,
-    schoolId,
+    selectedSchoolId,
     selectedCourseId,
     bc1Code,
     status,
@@ -1598,6 +1663,9 @@ export default function StudentsPage() {
         nationalityName: student.nationalityName ?? "",
         permanentAddress: student.permanentAddress ?? "",
         currentAddress: student.currentAddress ?? "",
+        phoneNumber: student.phoneNumber ?? "",
+        provinceCode: student.provinceCode ?? "",
+        wardCode: student.wardCode ?? "",
       };
 
       /**
@@ -1617,6 +1685,12 @@ export default function StudentsPage() {
         editData.examinationContent = ownIntake.examinationContent ?? "";
 
         editData.certificateIssuer = ownIntake.certificateIssuer ?? "";
+        editData.trainingCompletionNumber =
+          ownIntake.trainingCompletionNumber ?? "";
+        editData.trainingCompletionIssuedDate =
+          ownIntake.trainingCompletionIssuedDate?.slice(0, 10) ?? "";
+        editData.trainingCompletionIssuer =
+          ownIntake.trainingCompletionIssuer ?? "";
 
         editData.identityIssuedDate = ownIntake.identityIssuedDate ?? "";
 
@@ -1725,6 +1799,9 @@ export default function StudentsPage() {
       {!isSystemAdmin && courseError && (
         <Alert severity="warning">{courseError}</Alert>
       )}
+      {!isSystemAdmin && schoolsError && (
+        <Alert severity="warning">{schoolsError}</Alert>
+      )}
 
       {isSystemAdmin && (
         <Alert severity="info">
@@ -1755,11 +1832,36 @@ export default function StudentsPage() {
                 display: "grid",
                 gridTemplateColumns: {
                   xs: "1fr",
-                  md: "repeat(2, minmax(0, 1fr))",
+                  md: "repeat(3, minmax(0, 1fr))",
                 },
                 gap: 1.5,
               }}
             >
+              <TextField
+                select
+                fullWidth
+                size="small"
+                label="Cơ sở đào tạo"
+                value={selectedSchoolId ? String(selectedSchoolId) : ""}
+                disabled={schoolsLoading}
+                onChange={(event) => {
+                  const nextSchoolId = Number(event.target.value) || 0;
+
+                  setSelectedSchoolId(nextSchoolId);
+                  setSelectedCourseId(0);
+                  setBc1Code("");
+                  setPage(1);
+                }}
+              >
+                <MenuItem value="">Tất cả cơ sở đào tạo</MenuItem>
+
+                {schools.map((school) => (
+                  <MenuItem key={school.id} value={String(school.id)}>
+                    {school.code} — {school.name}
+                  </MenuItem>
+                ))}
+              </TextField>
+
               <TextField
                 select
                 size="small"
@@ -1904,7 +2006,9 @@ export default function StudentsPage() {
               selectedCourseId > 0 &&
               " · Đang lọc theo khóa học"}
             {!isSystemAdmin && bc1Code && ` · BC1: ${bc1Code}`}
-            {!isSystemAdmin && schoolId > 0 && " · Đang lọc theo trường"}
+            {!isSystemAdmin &&
+              selectedSchoolId > 0 &&
+              " · Đang lọc theo cơ sở đào tạo"}
           </Typography>
         </Stack>
       </Card>

@@ -89,11 +89,9 @@ export type StudentIntakeUser = {
 
 export type StudentIntake = {
   id: number;
-
   studentId: number;
 
   intakeType: string;
-
   applicationType: StudentApplicationType;
 
   requestedLicenseClass: string | null;
@@ -101,12 +99,16 @@ export type StudentIntake = {
   examinationContent: string | null;
 
   certificateIssuer: string | null;
-  identityIssuedDate: string | null;
 
+  // Giấy xác nhận hoàn thành khóa đào tạo
+  trainingCompletionNumber?: string | null;
+  trainingCompletionIssuedDate?: string | null;
+  trainingCompletionIssuer?: string | null;
+
+  identityIssuedDate: string | null;
   note: string | null;
 
   documents: StudentIntakeDocument[];
-
   existingLicenses: StudentExistingLicense[];
 
   createdByUserId: number;
@@ -114,7 +116,6 @@ export type StudentIntake = {
 
   createdByName: string;
   createdByUsername: string;
-
   updatedByName: string | null;
 
   createdAt: string;
@@ -267,6 +268,10 @@ export type StudentDetail = StudentRow & {
 
   permanentAddress: string | null;
   currentAddress: string | null;
+
+  phoneNumber?: string | null;
+  provinceCode?: string | null;
+  wardCode?: string | null;
 
   /**
    * Lịch sử kỳ sát hạch và phần thi.
@@ -457,4 +462,14 @@ export function listCourseSummaries(
     `/courses?${queryString(params)}`,
     token
   );
+}
+
+export type SchoolOption = {
+  id: number;
+  code: string;
+  name: string;
+};
+
+export function listSchoolOptions(token: string): Promise<SchoolOption[]> {
+  return request<SchoolOption[]>("/school-options", token);
 }

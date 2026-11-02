@@ -40,6 +40,7 @@ import {
   type StudentFormData,
   type ExistingLicense,
 } from "@/lib/student-management";
+import { AdministrativeDivisionSelect } from "../common/AdministrativeDivisionSelect";
 
 type StudentEditData = Partial<StudentFormData> & {
   id: number;
@@ -535,6 +536,20 @@ export function StudentFormDialog({ open, student, onClose, onSaved }: Props) {
               />
 
               <TextField
+                fullWidth
+                size="small"
+                label="Số điện thoại"
+                value={form.phoneNumber}
+                onChange={(event) => change("phoneNumber", event.target.value)}
+                slotProps={{
+                  htmlInput: {
+                    maxLength: 20,
+                    inputMode: "tel",
+                  },
+                }}
+              />
+
+              <TextField
                 label="Giới tính"
                 select
                 size="small"
@@ -565,6 +580,18 @@ export function StudentFormDialog({ open, student, onClose, onSaved }: Props) {
               {textField("Mã quốc tịch", "nationalityCode")}
 
               {textField("Quốc tịch", "nationalityName")}
+
+              <AdministrativeDivisionSelect
+                provinceCode={form.provinceCode}
+                wardCode={form.wardCode}
+                onChange={(value) => {
+                  setForm((current) => ({
+                    ...current,
+                    provinceCode: value.provinceCode,
+                    wardCode: value.wardCode,
+                  }));
+                }}
+              />
 
               <TextField
                 label="Địa chỉ thường trú"
@@ -650,6 +677,35 @@ export function StudentFormDialog({ open, student, onClose, onSaved }: Props) {
 
               {textField("Cơ quan cấp giấy tờ", "certificateIssuer")}
 
+              <TextField
+                fullWidth
+                size="small"
+                label="Số giấy xác nhận hoàn thành khóa đào tạo"
+                value={form.trainingCompletionNumber}
+                onChange={(event) =>
+                  change("trainingCompletionNumber", event.target.value)
+                }
+              />
+
+              <TextField
+                fullWidth
+                size="small"
+                type="date"
+                label="Ngày cấp giấy xác nhận hoàn thành khóa đào tạo"
+                value={form.trainingCompletionIssuedDate}
+                onChange={(event) =>
+                  change("trainingCompletionIssuedDate", event.target.value)
+                }
+                slotProps={{
+                  inputLabel: { shrink: true },
+                }}
+              />
+
+              {textField(
+                "Nơi xác nhận hoàn thành khóa học",
+                "trainingCompletionIssuer"
+              )}
+              
               {/* GIẤY TỜ KÈM THEO */}
               <Divider sx={{ mt: 1 }} />
 

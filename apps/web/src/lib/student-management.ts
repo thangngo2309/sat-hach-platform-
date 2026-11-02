@@ -1,3 +1,4 @@
+
 import { API_URL, ApiError } from "@/lib/auth";
 
 export type StudentDocument = {
@@ -14,6 +15,7 @@ export type ExistingLicense = {
 };
 
 export type StudentFormData = {
+  // Thông tin học viên
   registrationCode: string;
   fullName: string;
   familyName: string;
@@ -26,12 +28,24 @@ export type StudentFormData = {
   permanentAddress: string;
   currentAddress: string;
 
+  // Thông tin liên hệ, địa bàn hành chính
+  phoneNumber: string;
+  provinceCode: string;
+  wardCode: string;
+
+  // Thông tin sát hạch
   applicationType: string;
   requestedLicenseClass: string;
   trainingLicenseClass: string;
   examinationContent: string;
   certificateIssuer: string;
   identityIssuedDate: string;
+
+  // Giấy xác nhận hoàn thành khóa đào tạo
+  trainingCompletionNumber: string;
+  trainingCompletionIssuedDate: string;
+  trainingCompletionIssuer: string;
+
   note: string;
   documents: StudentDocument[];
   existingLicenses: ExistingLicense[];
@@ -54,7 +68,8 @@ export const STUDENT_DOCUMENT_OPTIONS = [
   },
   {
     type: "driving_experience",
-    label: "Bản khai thời gian và số km lái xe an toàn theo mẫu quy định",
+    label:
+      "Bản khai thời gian và số km lái xe an toàn theo mẫu quy định",
   },
   {
     type: "diploma",
@@ -63,15 +78,12 @@ export const STUDENT_DOCUMENT_OPTIONS = [
   },
   {
     type: "current_license_copy",
-    label: "Bản sao chụp giấy phép lái xe hiện có (nếu cần)",
+    label:
+      "Bản sao chụp giấy phép lái xe hiện có (nếu cần)",
   },
   {
     type: "training_completion_certificate",
     label: "Giấy xác nhận hoàn thành khóa đào tạo",
-  },
-  {
-    type: "driving_license",
-    label: "Giấy phép lái xe",
   },
   {
     type: "exam_result_summary",
@@ -100,12 +112,21 @@ export const EMPTY_STUDENT_FORM: StudentFormData = {
   permanentAddress: "",
   currentAddress: "",
 
+  phoneNumber: "",
+  provinceCode: "",
+  wardCode: "",
+
   applicationType: "new",
   requestedLicenseClass: "",
   trainingLicenseClass: "",
   examinationContent: "",
   certificateIssuer: "",
   identityIssuedDate: "",
+
+  trainingCompletionNumber: "",
+  trainingCompletionIssuedDate: "",
+  trainingCompletionIssuer: "",
+
   note: "",
   documents: STUDENT_DOCUMENT_OPTIONS.map((item) => ({
     type: item.type,
@@ -155,8 +176,8 @@ async function submitStudent(
       Array.isArray(message)
         ? message.join(", ")
         : typeof message === "string"
-        ? message
-        : "Không thể lưu hồ sơ học viên.",
+          ? message
+          : "Không thể lưu hồ sơ học viên.",
       response.status
     );
   }
@@ -169,7 +190,13 @@ export function createStudent(
   values: StudentFormData,
   photo?: File | null
 ) {
-  return submitStudent(accessToken, "POST", "/students", values, photo);
+  return submitStudent(
+    accessToken,
+    "POST",
+    "/students",
+    values,
+    photo
+  );
 }
 
 export function updateStudent(
@@ -178,5 +205,11 @@ export function updateStudent(
   values: StudentFormData,
   photo?: File | null
 ) {
-  return submitStudent(accessToken, "PATCH", `/students/${id}`, values, photo);
+  return submitStudent(
+    accessToken,
+    "PATCH",
+    `/students/${id}`,
+    values,
+    photo
+  );
 }

@@ -112,51 +112,52 @@ export class CsdtReportsService {
     const f = this.parse(query);
 
     const [schools, sessions] = await Promise.all([
+      /**
+       * Danh sách tất cả CSĐT.
+       *
+       * Không giới hạn theo tháng, năm hoặc kỳ sát hạch.
+       * CSĐT chưa phát sinh dữ liệu vẫn xuất hiện.
+       */
       this.db.query(
         `
-          SELECT
-            s.id,
-            s.code,
-            s.name
-          FROM training_schools s
-          WHERE EXISTS (
-            SELECT 1
-            FROM examination_candidates ec
-            JOIN examination_sessions es
-              ON es.id = ec.examination_session_id
-            WHERE ec.training_school_id = s.id
-              AND es.exam_date >= $1::date
-              AND es.exam_date < ($2::date + INTERVAL '1 day')
-          )
-          ORDER BY s.name, s.code
-        `,
-        [f.fromDate, f.toDate],
+        SELECT
+          s.id,
+          s.code,
+          s.name
+        FROM training_schools s
+        ORDER BY s.name ASC, s.code ASC, s.id ASC
+      `,
       ),
 
+      /**
+       * Danh sách kỳ sát hạch vẫn lọc theo thời gian.
+       * Khi chọn CSĐT, chỉ hiện kỳ có thí sinh
+       * thuộc CSĐT đó.
+       */
       this.db.query(
         `
-          SELECT
-            es.id,
-            es.code,
-            es.exam_date AS "examDate",
-            c.name AS "centerName",
-            c.code AS "centerCode"
-          FROM examination_sessions es
-          LEFT JOIN examination_centers c
-            ON c.id = es.examination_center_id
-          WHERE es.exam_date >= $1::date
-            AND es.exam_date < ($2::date + INTERVAL '1 day')
-            AND (
-              $3::int IS NULL
-              OR EXISTS (
-                SELECT 1
-                FROM examination_candidates ec
-                WHERE ec.examination_session_id = es.id
-                  AND ec.training_school_id = $3::int
-              )
+        SELECT
+          es.id,
+          es.code,
+          es.exam_date AS "examDate",
+          c.name AS "centerName",
+          c.code AS "centerCode"
+        FROM examination_sessions es
+        LEFT JOIN examination_centers c
+          ON c.id = es.examination_center_id
+        WHERE es.exam_date >= $1::date
+          AND es.exam_date < ($2::date + INTERVAL '1 day')
+          AND (
+            $3::int IS NULL
+            OR EXISTS (
+              SELECT 1
+              FROM examination_candidates ec
+              WHERE ec.examination_session_id = es.id
+                AND ec.training_school_id = $3::int
             )
-          ORDER BY es.exam_date DESC, es.id DESC
-        `,
+          )
+        ORDER BY es.exam_date DESC, es.id DESC
+      `,
         [f.fromDate, f.toDate, f.schoolId],
       ),
     ]);

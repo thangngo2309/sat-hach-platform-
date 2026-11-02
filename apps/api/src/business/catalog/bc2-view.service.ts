@@ -834,6 +834,7 @@ export class Bc2ViewService {
               AS "examinationContent",
 
             si.certificate_issuer AS "certificateIssuer",
+            si.training_completion_issuer AS "trainingCompletionIssuer",
             si.identity_issued_date::text
               AS "identityIssuedDate",
 
@@ -969,5 +970,26 @@ export class Bc2ViewService {
         totalPages: Math.ceil(total / f.limit),
       },
     };
+  }
+
+  async schoolOptions(user: AuthUser) {
+    this.studentAccess.ensureStudentRole(user);
+
+    if (user.role === UserRole.SYSTEM_ADMIN) {
+      throw new BadRequestException(
+        'Tài khoản này không được sử dụng bộ lọc CSĐT.',
+      );
+    }
+
+    return this.db.query(
+      `
+      SELECT
+        id,
+        code,
+        name
+      FROM training_schools
+      ORDER BY name ASC, id ASC
+    `,
+    );
   }
 }

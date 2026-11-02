@@ -140,7 +140,7 @@ const systemItems: MenuEntry[] = [
     label: "Quản lý file",
     href: "/file-review",
     icon: FolderOutlined,
-  }
+  },
 ];
 
 const businessWorkspaceItems: MenuEntry[] = [
@@ -149,12 +149,13 @@ const businessWorkspaceItems: MenuEntry[] = [
     href: "/role-workspace",
     icon: DescriptionOutlined,
   },
-  {
-    label: "Quản lý file",
-    href: "/file-review",
-    icon: FolderOutlined,
-  }
 ];
+
+const fileReviewItem: MenuEntry = {
+  label: "Quản lý file",
+  href: "/file-review",
+  icon: FolderOutlined,
+};
 
 const BUSINESS_ROLES = [
   "training_school",
@@ -168,6 +169,7 @@ const allItems = [
   ...importItems,
   ...systemItems,
   ...businessWorkspaceItems,
+  fileReviewItem,
 ];
 
 function isRouteSelected(pathname: string, href: string) {
@@ -198,8 +200,18 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
 
   const drawerWidth = collapsed ? COLLAPSED_WIDTH : DRAWER_WIDTH;
 
+  const canAccessFileReview = [
+    "super_admin",
+    "training_school",
+    "pc08_staff",
+    "exam_center",
+  ].includes(user?.role ?? "");
+
   const visibleMainItems = isBusinessAccount
-    ? businessWorkspaceItems
+    ? [
+        ...businessWorkspaceItems,
+        ...(canAccessFileReview ? [fileReviewItem] : []),
+      ]
     : isSystemAdmin
     ? mainItems.filter((item) => item.href === "/students")
     : mainItems;
@@ -232,7 +244,11 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
     // Các tài khoản nghiệp vụ mới chỉ được
     // vào không gian làm việc ở Giai đoạn 1.
     if (isBusinessAccount) {
-      if (pathname !== "/role-workspace") {
+      const allowedPaths = canAccessFileReview
+        ? ["/role-workspace", "/file-review"]
+        : ["/role-workspace"];
+
+      if (!allowedPaths.includes(pathname)) {
         router.replace("/role-workspace");
       }
 
@@ -616,7 +632,9 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
 
   if (
     (isSystemAdmin && pathname !== "/students") ||
-    (isBusinessAccount && pathname !== "/role-workspace") ||
+    (isBusinessAccount &&
+      pathname !== "/role-workspace" &&
+      !(canAccessFileReview && pathname === "/file-review")) ||
     (!isBusinessAccount && !isSystemAdmin && pathname === "/role-workspace") ||
     (pathname === "/users" && !isSuperAdmin)
   ) {

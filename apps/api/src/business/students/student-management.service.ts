@@ -36,6 +36,7 @@ export type StudentInput = {
   note?: string;
   documents?: string | unknown[];
   existingLicenses?: string | unknown[];
+  trainingCompletionIssuer?: string;
 };
 
 type StudentValues = {
@@ -62,6 +63,7 @@ type IntakeValues = {
   note: string | null;
   documents: string;
   existingLicenses: string;
+  trainingCompletionIssuer: string | null;
 };
 
 @Injectable()
@@ -230,6 +232,11 @@ export class StudentManagementService {
         'cơ quan cấp',
         255,
       ),
+      trainingCompletionIssuer: this.optional(
+        input.trainingCompletionIssuer,
+        'nơi xác nhận hoàn thành khóa học',
+        255,
+      ),
       identityIssuedDate: this.date(input.identityIssuedDate, 'Ngày cấp CCCD'),
       note: this.optional(input.note, 'ghi chú', 5000),
       documents: this.jsonArray(input.documents, 'Giấy tờ kèm theo', 30),
@@ -290,43 +297,57 @@ export class StudentManagementService {
   ): Promise<void> {
     await manager.query(
       `
-        INSERT INTO student_intakes (
-          student_id,
-          created_by_user_id,
-          updated_by_user_id,
-          intake_type,
-          application_type,
-          requested_license_class,
-          training_license_class,
-          examination_content,
-          certificate_issuer,
-          identity_issued_date,
-          note,
-          documents,
-          existing_licenses
-        )
-        VALUES (
-          $1, $2, $2, 'independent',
-          $3, $4, $5, $6, $7, $8::date, $9,
-          $10::jsonb, $11::jsonb
-        )
-        ON CONFLICT (
-          student_id,
-          created_by_user_id
-        )
-        DO UPDATE SET
-          updated_by_user_id = EXCLUDED.updated_by_user_id,
-          application_type = EXCLUDED.application_type,
-          requested_license_class = EXCLUDED.requested_license_class,
-          training_license_class = EXCLUDED.training_license_class,
-          examination_content = EXCLUDED.examination_content,
-          certificate_issuer = EXCLUDED.certificate_issuer,
-          identity_issued_date = EXCLUDED.identity_issued_date,
-          note = EXCLUDED.note,
-          documents = EXCLUDED.documents,
-          existing_licenses = EXCLUDED.existing_licenses,
-          updated_at = NOW()
-      `,
+      INSERT INTO student_intakes (
+        student_id,
+        created_by_user_id,
+        updated_by_user_id,
+        intake_type,
+        application_type,
+        requested_license_class,
+        training_license_class,
+        examination_content,
+        certificate_issuer,
+        training_completion_issuer,
+        identity_issued_date,
+        note,
+        documents,
+        existing_licenses
+      )
+      VALUES (
+        $1,
+        $2,
+        $2,
+        'independent',
+        $3,
+        $4,
+        $5,
+        $6,
+        $7,
+        $8,
+        $9::date,
+        $10,
+        $11::jsonb,
+        $12::jsonb
+      )
+      ON CONFLICT (
+        student_id,
+        created_by_user_id
+      )
+      DO UPDATE SET
+        updated_by_user_id = EXCLUDED.updated_by_user_id,
+        application_type = EXCLUDED.application_type,
+        requested_license_class = EXCLUDED.requested_license_class,
+        training_license_class = EXCLUDED.training_license_class,
+        examination_content = EXCLUDED.examination_content,
+        certificate_issuer = EXCLUDED.certificate_issuer,
+        training_completion_issuer =
+          EXCLUDED.training_completion_issuer,
+        identity_issued_date = EXCLUDED.identity_issued_date,
+        note = EXCLUDED.note,
+        documents = EXCLUDED.documents,
+        existing_licenses = EXCLUDED.existing_licenses,
+        updated_at = NOW()
+    `,
       [
         studentId,
         userId,
@@ -335,6 +356,7 @@ export class StudentManagementService {
         values.trainingLicenseClass,
         values.examinationContent,
         values.certificateIssuer,
+        values.trainingCompletionIssuer,
         values.identityIssuedDate,
         values.note,
         values.documents,
@@ -611,6 +633,7 @@ export class StudentManagementService {
         'note',
         'documents',
         'existingLicenses',
+        'trainingCompletionIssuer',
       ].some((key) => Object.prototype.hasOwnProperty.call(input, key));
 
       if (containsIntakeFields) {
@@ -647,6 +670,10 @@ export class StudentManagementService {
           note: input.note ?? row.note ?? '',
           documents: input.documents ?? row.documents,
           existingLicenses: input.existingLicenses ?? row.existing_licenses,
+          trainingCompletionIssuer:
+            input.trainingCompletionIssuer ??
+            row.training_completion_issuer ??
+            '',
         });
 
         await this.saveIntake(manager, id, user.sub, intake);

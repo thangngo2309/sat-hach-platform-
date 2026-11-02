@@ -1,4 +1,3 @@
-
 import {
   Controller,
   Get,
@@ -16,28 +15,16 @@ import { CurrentUser } from '../../shared/decorators/current-user.decorator.js';
 import { UserRole } from '../../entities/user.entity.js';
 import type { AuthUser } from '../../shared/types/auth-user.type.js';
 
-import {
-  Bc2ViewService,
-  type Bc2ViewQuery,
-} from './bc2-view.service.js';
+import { Bc2ViewService, type Bc2ViewQuery } from './bc2-view.service.js';
 
 @Controller('bc2-view')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(
-  UserRole.SUPER_ADMIN,
-  UserRole.ADMIN,
-  UserRole.SYSTEM_ADMIN,
-)
+@Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.SYSTEM_ADMIN)
 export class Bc2ViewController {
-  constructor(
-    private readonly service: Bc2ViewService,
-  ) {}
+  constructor(private readonly service: Bc2ViewService) {}
 
   @Get('students')
-  students(
-    @CurrentUser() user: AuthUser,
-    @Query() query: Bc2ViewQuery,
-  ) {
+  students(@CurrentUser() user: AuthUser, @Query() query: Bc2ViewQuery) {
     return this.service.students(query, user);
   }
 
@@ -53,5 +40,10 @@ export class Bc2ViewController {
   @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN)
   courses(@Query() query: Bc2ViewQuery) {
     return this.service.courseSummary(query);
+  }
+
+  @Get('school-options')
+  schoolOptions(@CurrentUser() user: AuthUser) {
+    return this.service.schoolOptions(user);
   }
 }
