@@ -6,11 +6,13 @@ import { useRouter, useSearchParams } from "next/navigation";
 
 import {
   Alert,
+  Autocomplete,
   Box,
   Button,
   Card,
   Chip,
   CircularProgress,
+  MenuItem,
   Pagination,
   Stack,
   Table,
@@ -34,11 +36,100 @@ import { useAuth } from "@/components/auth/AuthProvider";
 
 import {
   listCourseSummaries,
+  listExaminationCenterOptions,
   type CourseSummary,
+  type ExaminationCenterOption,
   type PageResult,
 } from "@/lib/bc2-view";
 
 import { exportPagedExcel } from "@/lib/export-excel";
+
+type PeriodMode = "all" | "year" | "month" | "quarter" | "range";
+
+type CourseFilters = {
+  search: string;
+  centerId?: number;
+  dateFrom?: string;
+  dateTo?: string;
+};
+
+const CURRENT_YEAR = new Date().getFullYear();
+
+const YEAR_OPTIONS = Array.from(
+  { length: 21 },
+  (_, index) => CURRENT_YEAR + 5 - index
+);
+
+const MONTH_OPTIONS = Array.from({ length: 12 }, (_, index) => index + 1);
+
+function pad2(value: number): string {
+  return String(value).padStart(2, "0");
+}
+
+function monthEnd(year: number, month: number): string {
+  const day = new Date(Date.UTC(year, month, 0)).getUTCDate();
+
+  return `${year}-${pad2(month)}-${pad2(day)}`;
+}
+
+function periodBounds(
+  mode: PeriodMode,
+  year: number,
+  month: number,
+  quarter: number,
+  from: string,
+  to: string
+): Pick<CourseFilters, "dateFrom" | "dateTo"> {
+  if (mode === "all") {
+    return {};
+  }
+
+  if (mode === "year") {
+    return {
+      dateFrom: `${year}-01-01`,
+      dateTo: `${year}-12-31`,
+    };
+  }
+
+  if (mode === "month") {
+    return {
+      dateFrom: `${year}-${pad2(month)}-01`,
+      dateTo: monthEnd(year, month),
+    };
+  }
+
+  if (mode === "quarter") {
+    const startMonth = (quarter - 1) * 3 + 1;
+    const endMonth = startMonth + 2;
+
+    return {
+      dateFrom: `${year}-${pad2(startMonth)}-01`,
+      dateTo: monthEnd(year, endMonth),
+    };
+  }
+
+  if (from && to && from > to) {
+    throw new Error("Ngày bắt đầu không được lớn hơn ngày kết thúc.");
+  }
+
+  if (!from || !to) {
+    throw new Error("Vui lòng chọn đầy đủ ngày bắt đầu và ngày kết thúc.");
+  }
+
+  return {
+    dateFrom: from,
+    dateTo: to,
+  };
+}
+
+function formatDate(value?: string | null): string {
+  if (!value) return "—";
+
+  const text = value.slice(0, 10);
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+
+  return match ? `${match[3]}/${match[2]}/${match[1]}` : text;
+}
 
 export default function CoursesPage() {
   const router = useRouter();
@@ -49,7 +140,28 @@ export default function CoursesPage() {
   const schoolId = Number(searchParams.get("schoolId") || 0);
 
   const [searchInput, setSearchInput] = useState("");
-  const [search, setSearch] = useState("");
+  const [selectedCenter, setSelectedCenter] =
+    useState<ExaminationCenterOption | null>(null);
+
+  const [period, setPeriod] = useState<PeriodMode>("all");
+
+  const [year, setYear] = useState(CURRENT_YEAR);
+  const [month, setMonth] = useState(new Date().getMonth() + 1);
+  const [quarter, setQuarter] = useState(
+    Math.floor(new Date().getMonth() / 3) + 1
+  );
+
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+
+  const [filters, setFilters] = useState<CourseFilters>({
+    search: "",
+  });
+
+  const [centers, setCenters] = useState<ExaminationCenterOption[]>([]);
+
+  const [loadingCenters, setLoadingCenters] = useState(false);
+
   const [page, setPage] = useState(1);
   const [reload, setReload] = useState(0);
 
@@ -57,8 +169,44 @@ export default function CoursesPage() {
 
   const [fetching, setFetching] = useState(false);
   const [exporting, setExporting] = useState(false);
+
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+
+  useEffect(() => {
+    if (!accessToken) {
+      setCenters([]);
+      return;
+    }
+
+    let active = true;
+    setLoadingCenters(true);
+
+    void listExaminationCenterOptions(accessToken)
+      .then((data) => {
+        if (active) {
+          setCenters(Array.isArray(data) ? data : []);
+        }
+      })
+      .catch((err: unknown) => {
+        if (active) {
+          setError(
+            err instanceof Error
+              ? err.message
+              : "Không tải được danh mục trung tâm sát hạch."
+          );
+        }
+      })
+      .finally(() => {
+        if (active) {
+          setLoadingCenters(false);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [accessToken]);
 
   const load = useCallback(async () => {
     if (!accessToken) return;
@@ -67,24 +215,80 @@ export default function CoursesPage() {
     setError("");
 
     try {
-      setResult(
-        await listCourseSummaries(accessToken, {
-          page,
-          limit: 20,
-          search,
-          schoolId: schoolId || undefined,
-        })
-      );
+      const response = await listCourseSummaries(accessToken, {
+        page,
+        limit: 20,
+        schoolId: schoolId || undefined,
+        search: filters.search,
+        centerId: filters.centerId,
+        dateFrom: filters.dateFrom,
+        dateTo: filters.dateTo,
+      });
+
+      setResult(response);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Không tải được khóa học.");
+      setResult(null);
+
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Không tải được danh sách khóa học."
+      );
     } finally {
       setFetching(false);
     }
-  }, [accessToken, page, search, schoolId, reload]);
+  }, [accessToken, page, schoolId, filters, reload]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  function applyFilters() {
+    setError("");
+    setSuccess("");
+
+    try {
+      const dates = periodBounds(
+        period,
+        year,
+        month,
+        quarter,
+        dateFrom,
+        dateTo
+      );
+
+      setPage(1);
+      setFilters({
+        search: searchInput.trim(),
+        centerId: selectedCenter?.id,
+        ...dates,
+      });
+
+      // Nếu bộ lọc không đổi vẫn cho tìm lại.
+      setReload((value) => value + 1);
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Bộ lọc thời gian không hợp lệ."
+      );
+    }
+  }
+
+  function resetFilters() {
+    setSearchInput("");
+    setSelectedCenter(null);
+    setPeriod("all");
+    setYear(CURRENT_YEAR);
+    setMonth(new Date().getMonth() + 1);
+    setQuarter(Math.floor(new Date().getMonth() / 3) + 1);
+    setDateFrom("");
+    setDateTo("");
+
+    setPage(1);
+    setFilters({ search: "" });
+    setError("");
+    setSuccess("");
+    setReload((value) => value + 1);
+  }
 
   async function handleExport() {
     if (!accessToken || exporting) return;
@@ -97,6 +301,7 @@ export default function CoursesPage() {
       const count = await exportPagedExcel<CourseSummary>({
         filename: "Danh_sach_khoa_hoc.xlsx",
         sheetName: "Khoa hoc",
+
         columns: [
           {
             header: "Mã khóa",
@@ -131,13 +336,13 @@ export default function CoursesPage() {
           {
             header: "Ngày khai giảng",
             key: "openingDate",
-            width: 19,
-            value: (row) => row.openingDate?.slice(0, 10) ?? "",
+            width: 20,
+            value: (row) => formatDate(row.openingDate),
           },
           {
             header: "Học viên BC1",
             key: "studentCount",
-            width: 18,
+            width: 19,
             value: (row) => row.studentCount,
           },
           {
@@ -149,20 +354,28 @@ export default function CoursesPage() {
           {
             header: "Chưa đối chiếu",
             key: "noBc2Count",
-            width: 20,
+            width: 21,
             value: (row) => row.noBc2Count,
           },
         ],
+
         fetchPage: (nextPage, limit) =>
           listCourseSummaries(accessToken, {
             page: nextPage,
             limit,
-            search,
             schoolId: schoolId || undefined,
+            search: filters.search,
+            centerId: filters.centerId,
+            dateFrom: filters.dateFrom,
+            dateTo: filters.dateTo,
           }),
       });
 
-      setSuccess(`Đã xuất ${count.toLocaleString("vi-VN")} khóa học.`);
+      setSuccess(
+        `Đã xuất ${count.toLocaleString(
+          "vi-VN"
+        )} khóa học theo bộ lọc đang áp dụng.`
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Không thể xuất Excel.");
     } finally {
@@ -186,11 +399,16 @@ export default function CoursesPage() {
 
   return (
     <Stack spacing={3}>
+      {/* TIÊU ĐỀ */}
       <Stack
         direction={{ xs: "column", sm: "row" }}
+        spacing={2}
         sx={{
+          alignItems: {
+            xs: "stretch",
+            sm: "center",
+          },
           justifyContent: "space-between",
-          gap: 2,
         }}
       >
         <Box>
@@ -241,46 +459,225 @@ export default function CoursesPage() {
         </Alert>
       )}
 
-      <Card variant="outlined" sx={{ p: 2, borderRadius: 3 }}>
+      {/* BỘ LỌC */}
+      <Card
+        variant="outlined"
+        sx={{
+          p: { xs: 1.5, md: 2 },
+          borderRadius: 3,
+        }}
+      >
         <Stack
           component="form"
-          sx={{
-            direction: {
-              xs: "column",
-              sm: "row",
-            },
-            gap: 2,
-          }}
+          spacing={2}
           onSubmit={(event) => {
             event.preventDefault();
-            setPage(1);
-            setSearch(searchInput.trim());
+            applyFilters();
           }}
         >
+          <Box
+            sx={{
+              display: "grid",
+              gridTemplateColumns: {
+                xs: "1fr",
+                md: "repeat(2, minmax(0, 1fr))",
+              },
+              gap: 2,
+            }}
+          >
+            <Autocomplete
+              fullWidth
+              size="small"
+              options={centers}
+              value={selectedCenter}
+              loading={loadingCenters}
+              disabled={loadingCenters}
+              autoHighlight
+              openOnFocus
+              getOptionLabel={(option) =>
+                `${option.code} — ${option.name || "Chưa đặt tên"}`
+              }
+              isOptionEqualToValue={(option, value) => option.id === value.id}
+              onChange={(_, value) => setSelectedCenter(value)}
+              noOptionsText="Không tìm thấy trung tâm"
+              renderInput={(params) => (
+                <TextField
+                  {...params}
+                  label="Trung tâm sát hạch"
+                  placeholder="Tất cả trung tâm"
+                />
+              )}
+            />
+
+            <TextField
+              select
+              fullWidth
+              size="small"
+              label="Lọc theo thời gian"
+              value={period}
+              onChange={(event) => setPeriod(event.target.value as PeriodMode)}
+            >
+              <MenuItem value="all">Tất cả thời gian</MenuItem>
+              <MenuItem value="year">Theo năm</MenuItem>
+              <MenuItem value="month">Theo tháng</MenuItem>
+              <MenuItem value="quarter">Theo quý</MenuItem>
+              <MenuItem value="range">Từ ngày đến ngày</MenuItem>
+            </TextField>
+          </Box>
+
+          {period !== "all" && (
+            <Box
+              sx={{
+                display: "grid",
+                gridTemplateColumns: {
+                  xs: "1fr",
+                  sm: "repeat(2, minmax(0, 1fr))",
+                },
+                gap: 2,
+              }}
+            >
+              {period !== "range" && (
+                <TextField
+                  select
+                  fullWidth
+                  size="small"
+                  label="Năm"
+                  value={year}
+                  onChange={(event) => setYear(Number(event.target.value))}
+                >
+                  {YEAR_OPTIONS.map((value) => (
+                    <MenuItem key={value} value={value}>
+                      {value}
+                    </MenuItem>
+                  ))}
+                </TextField>
+              )}
+
+              {period === "month" && (
+                <TextField
+                  select
+                  fullWidth
+                  size="small"
+                  label="Tháng"
+                  value={month}
+                  onChange={(event) => setMonth(Number(event.target.value))}
+                >
+                  {MONTH_OPTIONS.map((value) => (
+                    <MenuItem key={value} value={value}>
+                      Tháng {value}
+                    </MenuItem>
+                  ))}
+                </TextField>
+              )}
+
+              {period === "quarter" && (
+                <TextField
+                  select
+                  fullWidth
+                  size="small"
+                  label="Quý"
+                  value={quarter}
+                  onChange={(event) => setQuarter(Number(event.target.value))}
+                >
+                  {[1, 2, 3, 4].map((value) => (
+                    <MenuItem key={value} value={value}>
+                      Quý {value}
+                    </MenuItem>
+                  ))}
+                </TextField>
+              )}
+
+              {period === "range" && (
+                <>
+                  <TextField
+                    fullWidth
+                    size="small"
+                    type="date"
+                    label="Từ ngày"
+                    value={dateFrom}
+                    onChange={(event) => setDateFrom(event.target.value)}
+                    slotProps={{
+                      inputLabel: { shrink: true },
+                    }}
+                  />
+
+                  <TextField
+                    fullWidth
+                    size="small"
+                    type="date"
+                    label="Đến ngày"
+                    value={dateTo}
+                    onChange={(event) => setDateTo(event.target.value)}
+                    slotProps={{
+                      inputLabel: { shrink: true },
+                      htmlInput: {
+                        min: dateFrom || undefined,
+                      },
+                    }}
+                  />
+                </>
+              )}
+            </Box>
+          )}
+
           <TextField
-            label="Tìm mã khóa, tên khóa, trường"
+            fullWidth
             size="small"
+            label="Tìm mã khóa, tên khóa, cơ sở đào tạo"
             value={searchInput}
             onChange={(event) => setSearchInput(event.target.value)}
-            sx={{ flex: 1 }}
           />
 
-          <Button
-            type="submit"
-            variant="contained"
-            startIcon={<SearchOutlined />}
-            sx={{ textTransform: "none" }}
-          >
-            Tìm kiếm
-          </Button>
-        </Stack>
+          <Stack direction={{ xs: "column", sm: "row" }} spacing={1}>
+            <Button
+              type="submit"
+              variant="contained"
+              startIcon={<SearchOutlined />}
+              disabled={fetching}
+              sx={{
+                flex: 1,
+                textTransform: "none",
+              }}
+            >
+              Tìm kiếm
+            </Button>
 
-        <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
-          Tổng số khóa: {result?.pagination.total ?? 0}
-          {schoolId > 0 ? " · Đang lọc theo trường đào tạo" : ""}
-        </Typography>
+            <Button
+              type="button"
+              variant="outlined"
+              color="inherit"
+              disabled={fetching}
+              onClick={resetFilters}
+              sx={{
+                textTransform: "none",
+              }}
+            >
+              Xóa bộ lọc
+            </Button>
+          </Stack>
+
+          <Typography variant="body2" color="text.secondary">
+            Tổng số khóa:{" "}
+            <strong>
+              {(result?.pagination.total ?? 0).toLocaleString("vi-VN")}
+            </strong>
+            {schoolId > 0 ? " · Đang lọc theo cơ sở đào tạo" : ""}
+            {filters.centerId ? " · Đang lọc theo trung tâm sát hạch" : ""}
+            {filters.dateFrom && filters.dateTo
+              ? ` · Ngày khai giảng: ${formatDate(
+                  filters.dateFrom
+                )} - ${formatDate(filters.dateTo)}`
+              : ""}
+          </Typography>
+
+          <Typography variant="caption" color="text.secondary">
+            Thời gian được tính theo ngày khai giảng khóa học. Trung tâm sát
+            hạch được đối chiếu qua lịch sử dự thi của các học viên thuộc khóa.
+          </Typography>
+        </Stack>
       </Card>
 
+      {/* DANH SÁCH */}
       <Card variant="outlined" sx={{ borderRadius: 3 }}>
         {fetching && !result ? (
           <Box
@@ -294,13 +691,14 @@ export default function CoursesPage() {
           </Box>
         ) : (
           <TableContainer>
-            <Table size="small" sx={{ minWidth: 900 }}>
+            <Table size="small" sx={{ minWidth: 1000 }}>
               <TableHead>
                 <TableRow>
                   <TableCell>Mã khóa</TableCell>
                   <TableCell>Tên khóa</TableCell>
                   <TableCell>Trường đào tạo</TableCell>
                   <TableCell>Hạng GPLX</TableCell>
+                  <TableCell>Ngày khai giảng</TableCell>
                   <TableCell align="right">Học viên BC1</TableCell>
                   <TableCell align="right">Đã đối chiếu BC2</TableCell>
                   <TableCell align="right">Chưa đối chiếu</TableCell>
@@ -326,6 +724,8 @@ export default function CoursesPage() {
                         variant="outlined"
                       />
                     </TableCell>
+
+                    <TableCell>{formatDate(course.openingDate)}</TableCell>
 
                     <TableCell align="right">{course.studentCount}</TableCell>
 
@@ -364,9 +764,9 @@ export default function CoursesPage() {
                   </TableRow>
                 ))}
 
-                {!fetching && !result?.data.length && (
+                {!fetching && !(result?.data.length ?? 0) && (
                   <TableRow>
-                    <TableCell colSpan={8} align="center" sx={{ py: 5 }}>
+                    <TableCell colSpan={9} align="center" sx={{ py: 5 }}>
                       Chưa có khóa học phù hợp.
                     </TableCell>
                   </TableRow>
@@ -374,6 +774,12 @@ export default function CoursesPage() {
               </TableBody>
             </Table>
           </TableContainer>
+        )}
+
+        {fetching && result && (
+          <Box sx={{ p: 1.5 }}>
+            <CircularProgress size={18} />
+          </Box>
         )}
 
         {(result?.pagination.totalPages ?? 0) > 1 && (
@@ -386,9 +792,11 @@ export default function CoursesPage() {
           >
             <Pagination
               page={page}
-              count={result!.pagination.totalPages}
+              count={result?.pagination.totalPages ?? 1}
               onChange={(_, value) => setPage(value)}
               color="primary"
+              showFirstButton
+              showLastButton
             />
           </Box>
         )}

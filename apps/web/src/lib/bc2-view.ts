@@ -340,6 +340,10 @@ export type ViewParams = {
   bc2Status?: "all" | "has_bc2" | "no_bc2";
 
   examStatus?: "all" | StudentExamStatus | "absent" | "retake";
+
+  centerId?: number;
+  dateFrom?: string;
+  dateTo?: string;
 };
 
 /**
@@ -401,6 +405,18 @@ function queryString(params: ViewParams): string {
 
   if (params.examStatus && params.examStatus !== "all") {
     query.set("examStatus", params.examStatus);
+  }
+
+  if (params.centerId) {
+    query.set("centerId", String(params.centerId));
+  }
+
+  if (params.dateFrom) {
+    query.set("dateFrom", params.dateFrom);
+  }
+
+  if (params.dateTo) {
+    query.set("dateTo", params.dateTo);
   }
 
   return query.toString();
@@ -472,4 +488,20 @@ export type SchoolOption = {
 
 export function listSchoolOptions(token: string): Promise<SchoolOption[]> {
   return request<SchoolOption[]>("/school-options", token);
+}
+
+
+export type ExaminationCenterOption = {
+  id: number;
+  code: string;
+  name: string | null;
+};
+
+export function listExaminationCenterOptions(
+  token: string
+): Promise<ExaminationCenterOption[]> {
+  return request<ExaminationCenterOption[]>(
+    "/examination-center-options",
+    token
+  );
 }

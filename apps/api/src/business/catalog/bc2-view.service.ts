@@ -19,6 +19,9 @@ export type Bc2ViewQuery = {
   courseId?: string;
   bc2Status?: string;
   examStatus?: string;
+  centerId?: string;
+  dateFrom?: string;
+  dateTo?: string;
 };
 
 type StudentExamSummary = {
@@ -888,74 +891,158 @@ export class Bc2ViewService {
   async courseSummary(query: Bc2ViewQuery) {
     const f = this.filters(query);
 
-    const params = [f.search, f.schoolId];
+    const centerId = query.centerId
+      ? this.positiveInt(query.centerId, 1)
+      : null;
+
+    const parseDate = (
+      input: string | undefined,
+      label: string,
+    ): string | null => {
+      if (!input) return null;
+
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(input)) {
+        throw new BadRequestException(`${label} phải có định dạng YYYY-MM-DD.`);
+      }
+
+      const [year, month, day] = input.split('-').map(Number);
+
+      const parsed = new Date(Date.UTC(year, month - 1, day));
+
+      if (
+        parsed.getUTCFullYear() !== year ||
+        parsed.getUTCMonth() !== month - 1 ||
+        parsed.getUTCDate() !== day
+      ) {
+        throw new BadRequestException(`${label} không hợp lệ.`);
+      }
+
+      return input;
+    };
+
+    const dateFrom = parseDate(query.dateFrom, 'Ngày bắt đầu');
+
+    const dateTo = parseDate(query.dateTo, 'Ngày kết thúc');
+
+    if (dateFrom && dateTo && dateFrom > dateTo) {
+      throw new BadRequestException(
+        'Ngày bắt đầu không được lớn hơn ngày kết thúc.',
+      );
+    }
+
+    /**
+     * $1: từ khóa
+     * $2: cơ sở đào tạo
+     * $3: trung tâm sát hạch
+     * $4: ngày khai giảng từ
+     * $5: ngày khai giảng đến
+     *
+     * $6: LIMIT
+     * $7: OFFSET
+     */
+    const params: unknown[] = [
+      f.search,
+      f.schoolId,
+      centerId,
+      dateFrom,
+      dateTo,
+    ];
 
     const where = `
-      WHERE (
-        $1::text = ''
-        OR c.code ILIKE '%' || $1::text || '%'
-        OR c.name ILIKE '%' || $1::text || '%'
-        OR sc.name ILIKE '%' || $1::text || '%'
+    WHERE (
+      $1::text = ''
+      OR c.code ILIKE '%' || $1::text || '%'
+      OR c.name ILIKE '%' || $1::text || '%'
+      OR sc.name ILIKE '%' || $1::text || '%'
+    )
+
+    AND (
+      $2::int IS NULL
+      OR c.school_id = $2::int
+    )
+
+    AND (
+      $3::int IS NULL
+      OR EXISTS (
+        SELECT 1
+        FROM enrollments e_center
+        JOIN examination_candidates ec_center
+          ON ec_center.student_id = e_center.student_id
+        JOIN examination_sessions es_center
+          ON es_center.id = ec_center.examination_session_id
+        WHERE e_center.course_id = c.id
+          AND es_center.examination_center_id = $3::int
       )
-      AND (
-        $2::int IS NULL
-        OR c.school_id = $2::int
-      )
-    `;
+    )
+
+    AND (
+      $4::date IS NULL
+      OR c.opening_date::date >= $4::date
+    )
+
+    AND (
+      $5::date IS NULL
+      OR c.opening_date::date <= $5::date
+    )
+  `;
 
     const [countRows, data] = await Promise.all([
       this.db.query(
         `
-          SELECT COUNT(*)::int AS total
-          FROM courses c
-          JOIN training_schools sc
-            ON sc.id = c.school_id
-          ${where}
-        `,
+        SELECT COUNT(*)::int AS total
+        FROM courses c
+        JOIN training_schools sc
+          ON sc.id = c.school_id
+        ${where}
+      `,
         params,
       ),
 
       this.db.query(
         `
-          SELECT
-            c.id,
-            c.code,
-            c.name,
-            c.bc1_code AS "bc1Code",
-            c.license_class AS "licenseClass",
-            c.opening_date AS "openingDate",
-            c.school_id AS "schoolId",
-            sc.name AS "schoolName",
+        SELECT
+          c.id,
+          c.code,
+          c.name,
+          c.bc1_code AS "bc1Code",
+          c.license_class AS "licenseClass",
+          c.opening_date AS "openingDate",
+          c.school_id AS "schoolId",
+          sc.name AS "schoolName",
 
-            (
-              SELECT COUNT(*)::int
-              FROM enrollments e
-              WHERE e.course_id = c.id
-            ) AS "studentCount",
+          (
+            SELECT COUNT(*)::int
+            FROM enrollments e
+            WHERE e.course_id = c.id
+          ) AS "studentCount",
 
-            (
-              SELECT COUNT(*)::int
-              FROM enrollments e
-              WHERE e.course_id = c.id
-                AND EXISTS (
-                  SELECT 1
-                  FROM bc2_candidates bc
-                  JOIN bc2_reports r
-                    ON r.id = bc.report_id
-                  WHERE bc.student_id = e.student_id
-                    AND r.school_id = c.school_id
-                    AND r.bc1_code = c.bc1_code
-                    AND c.bc1_code IS NOT NULL
-                )
-            ) AS "bc2MatchedCount"
+          (
+            SELECT COUNT(*)::int
+            FROM enrollments e
+            WHERE e.course_id = c.id
+              AND EXISTS (
+                SELECT 1
+                FROM bc2_candidates bc
+                JOIN bc2_reports r
+                  ON r.id = bc.report_id
+                WHERE bc.student_id = e.student_id
+                  AND r.school_id = c.school_id
+                  AND r.bc1_code = c.bc1_code
+                  AND c.bc1_code IS NOT NULL
+              )
+          ) AS "bc2MatchedCount"
 
-          FROM courses c
-          JOIN training_schools sc
-            ON sc.id = c.school_id
-          ${where}
-          ORDER BY c.id DESC
-          LIMIT $3 OFFSET $4
-        `,
+        FROM courses c
+
+        JOIN training_schools sc
+          ON sc.id = c.school_id
+
+        ${where}
+
+        ORDER BY c.id DESC
+
+        LIMIT $6 OFFSET $7
+      `,
         [...params, f.limit, (f.page - 1) * f.limit],
       ),
     ]);
@@ -976,6 +1063,23 @@ export class Bc2ViewService {
         totalPages: Math.ceil(total / f.limit),
       },
     };
+  }
+
+  /**
+   * Danh mục TTSH dùng cho bộ lọc Khóa học.
+   * Chỉ gọi từ endpoint được phân quyền.
+   */
+  async examinationCenterOptions() {
+    return this.db.query(
+      `
+      SELECT
+        id,
+        code,
+        name
+      FROM examination_centers
+      ORDER BY name ASC NULLS LAST, code ASC, id ASC
+    `,
+    );
   }
 
   async schoolOptions(user: AuthUser) {

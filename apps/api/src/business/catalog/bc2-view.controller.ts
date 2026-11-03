@@ -42,6 +42,12 @@ export class Bc2ViewController {
     return this.service.courseSummary(query);
   }
 
+  @Get('examination-center-options')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN)
+  examinationCenterOptions() {
+    return this.service.examinationCenterOptions();
+  }
+
   @Get('school-options')
   schoolOptions(@CurrentUser() user: AuthUser) {
     return this.service.schoolOptions(user);
