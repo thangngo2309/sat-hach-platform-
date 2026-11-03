@@ -60,44 +60,58 @@ export type StudentSaved = {
   sourceType?: string;
 };
 
+
 export const STUDENT_DOCUMENT_OPTIONS = [
   {
     type: "health_certificate",
-    label:
-      "Giấy chứng nhận sức khỏe do cơ sở y tế có thẩm quyền cấp theo quy định",
-  },
-  {
-    type: "driving_experience",
-    label:
-      "Bản khai thời gian và số km lái xe an toàn theo mẫu quy định",
-  },
-  {
-    type: "diploma",
-    label:
-      "Bản sao có chứng thực bằng tốt nghiệp hoặc văn bằng tương đương (nếu cần)",
-  },
-  {
-    type: "current_license_copy",
-    label:
-      "Bản sao chụp giấy phép lái xe hiện có (nếu cần)",
+    label: "Giấy khám sức khỏe",
   },
   {
     type: "training_completion_certificate",
-    label: "Giấy xác nhận hoàn thành khóa đào tạo",
+    label: "Xác nhận hoàn thành khóa học",
+  },
+  {
+    type: "identity_copy",
+    label: "CCCD phô tô",
+  },
+  {
+    type: "current_license_copy",
+    label: "GPLX phô tô (nếu có)",
+  },
+  {
+    type: "student_verification",
+    label: "Xác minh thông tin học viên",
+  },
+  {
+    type: "dat_verification",
+    label: "Xác minh dữ liệu DAT",
   },
   {
     type: "exam_result_summary",
-    label: "Biên bản tổng hợp kết quả sát hạch",
+    label: "Biên bản tổng hợp kỳ sát hạch",
   },
   {
-    type: "photo_3x4",
-    label: "Ảnh thẻ 3x4",
-  },
-  {
-    type: "other",
-    label: "Khác",
+    type: "absent_failed_verification",
+    label: "Xác minh danh sách vắng, trượt",
   },
 ] as const;
+
+
+export const LEGACY_DOCUMENT_LABELS: Record<string, string> = {
+  driving_experience:
+    "Bản khai thời gian và số km lái xe an toàn theo mẫu quy định",
+
+  diploma:
+    "Bản sao có chứng thực bằng tốt nghiệp hoặc văn bằng tương đương (nếu cần)",
+
+  photo_3x4: "Ảnh thẻ 3x4",
+
+  other: "Giấy tờ khác",
+
+  driving_license: "Giấy phép lái xe",
+
+  medical_exam_certificate: "Giấy khám sức khỏe",
+};
 
 export const EMPTY_STUDENT_FORM: StudentFormData = {
   registrationCode: "",

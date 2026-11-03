@@ -39,6 +39,7 @@ import {
   type StudentDocument,
   type StudentFormData,
   type ExistingLicense,
+  LEGACY_DOCUMENT_LABELS,
 } from "@/lib/student-management";
 import { AdministrativeDivisionSelect } from "../common/AdministrativeDivisionSelect";
 
@@ -793,7 +794,12 @@ export function StudentFormDialog({ open, student, onClose, onSaved }: Props) {
                       (item) => item.type === document.type
                     );
 
-                    const label = option?.label ?? document.type;
+                    const label =
+                      option?.label ??
+                      LEGACY_DOCUMENT_LABELS[document.type] ??
+                      document.type;
+
+                    const isLegacyDocument = !option;
 
                     const isOther = document.type === "other";
 
@@ -877,6 +883,16 @@ export function StudentFormDialog({ open, student, onClose, onSaved }: Props) {
                               }}
                             >
                               {label}
+                              {isLegacyDocument && (
+                                <Typography
+                                  component="span"
+                                  variant="caption"
+                                  color="text.secondary"
+                                  sx={{ display: "block", mt: 0.25 }}
+                                >
+                                  Giấy tờ thuộc danh mục cũ
+                                </Typography>
+                              )}
                             </Typography>
                           </Box>
                         </Box>

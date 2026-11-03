@@ -37,6 +37,12 @@ export type StudentInput = {
   documents?: string | unknown[];
   existingLicenses?: string | unknown[];
   trainingCompletionIssuer?: string;
+
+  phoneNumber?: string;
+  provinceCode?: string;
+  wardCode?: string;
+  trainingCompletionNumber?: string;
+  trainingCompletionIssuedDate?: string;
 };
 
 type StudentValues = {
@@ -51,6 +57,10 @@ type StudentValues = {
   nationalityName: string | null;
   permanentAddress: string | null;
   currentAddress: string | null;
+
+  phoneNumber: string | null;
+  provinceCode: string | null;
+  wardCode: string | null;
 };
 
 type IntakeValues = {
@@ -64,6 +74,9 @@ type IntakeValues = {
   documents: string;
   existingLicenses: string;
   trainingCompletionIssuer: string | null;
+
+  trainingCompletionNumber: string | null;
+  trainingCompletionIssuedDate: string | null;
 };
 
 @Injectable()
@@ -199,6 +212,9 @@ export class StudentManagementService {
         'địa chỉ cư trú',
         5000,
       ),
+      phoneNumber: this.optional(input.phoneNumber, 'số điện thoại', 20),
+      provinceCode: this.optional(input.provinceCode, 'mã tỉnh/thành phố', 30),
+      wardCode: this.optional(input.wardCode, 'mã xã/phường', 30),
     };
   }
 
@@ -237,6 +253,15 @@ export class StudentManagementService {
         'nơi xác nhận hoàn thành khóa học',
         255,
       ),
+      trainingCompletionNumber: this.optional(
+        input.trainingCompletionNumber,
+        'số giấy xác nhận hoàn thành khóa đào tạo',
+        150,
+      ),
+      trainingCompletionIssuedDate: this.date(
+        input.trainingCompletionIssuedDate,
+        'ngày cấp giấy xác nhận hoàn thành khóa đào tạo',
+      ),
       identityIssuedDate: this.date(input.identityIssuedDate, 'Ngày cấp CCCD'),
       note: this.optional(input.note, 'ghi chú', 5000),
       documents: this.jsonArray(input.documents, 'Giấy tờ kèm theo', 30),
@@ -272,6 +297,9 @@ export class StudentManagementService {
           s.nationality_name AS "nationalityName",
           s.permanent_address AS "permanentAddress",
           s.current_address AS "currentAddress",
+          s.phone_number AS "phoneNumber",
+          s.province_code AS "provinceCode",
+          s.ward_code AS "wardCode",
           (s.photo_id IS NOT NULL) AS "hasPhoto",
           s.created_by_user_id AS "createdByUserId",
           s.updated_by_user_id AS "updatedByUserId",
@@ -308,26 +336,18 @@ export class StudentManagementService {
         examination_content,
         certificate_issuer,
         training_completion_issuer,
+        training_completion_number,
+        training_completion_issued_date,
         identity_issued_date,
         note,
         documents,
         existing_licenses
       )
       VALUES (
-        $1,
-        $2,
-        $2,
-        'independent',
-        $3,
-        $4,
-        $5,
-        $6,
-        $7,
-        $8,
-        $9::date,
-        $10,
-        $11::jsonb,
-        $12::jsonb
+        $1, $2, $2, 'independent',
+        $3, $4, $5, $6, $7, $8,
+        $9, $10::date, $11::date,
+        $12, $13::jsonb, $14::jsonb
       )
       ON CONFLICT (
         student_id,
@@ -342,6 +362,10 @@ export class StudentManagementService {
         certificate_issuer = EXCLUDED.certificate_issuer,
         training_completion_issuer =
           EXCLUDED.training_completion_issuer,
+        training_completion_number =
+          EXCLUDED.training_completion_number,
+        training_completion_issued_date =
+          EXCLUDED.training_completion_issued_date,
         identity_issued_date = EXCLUDED.identity_issued_date,
         note = EXCLUDED.note,
         documents = EXCLUDED.documents,
@@ -357,6 +381,8 @@ export class StudentManagementService {
         values.examinationContent,
         values.certificateIssuer,
         values.trainingCompletionIssuer,
+        values.trainingCompletionNumber,
+        values.trainingCompletionIssuedDate,
         values.identityIssuedDate,
         values.note,
         values.documents,
@@ -466,33 +492,37 @@ export class StudentManagementService {
 
       const inserted: Array<{ id: number }> = await manager.query(
         `
-            INSERT INTO students (
-              registration_code,
-              full_name,
-              family_name,
-              given_name,
-              date_of_birth,
-              gender,
-              identity_number,
-              nationality_code,
-              nationality_name,
-              permanent_address,
-              current_address,
-              candidate_type,
-              candidate_type_updated_at,
-              created_by_user_id,
-              updated_by_user_id,
-              source_type
-            )
-            VALUES (
-              $1, $2, $3, $4, $5::date, $6,
-              $7, $8, $9, $10, $11,
-              $12, NOW(), $13, $13, 'manual'
-            )
-            ON CONFLICT (registration_code)
-            DO NOTHING
-            RETURNING id
-          `,
+    INSERT INTO students (
+      registration_code,
+      full_name,
+      family_name,
+      given_name,
+      date_of_birth,
+      gender,
+      identity_number,
+      nationality_code,
+      nationality_name,
+      permanent_address,
+      current_address,
+      phone_number,
+      province_code,
+      ward_code,
+      candidate_type,
+      candidate_type_updated_at,
+      created_by_user_id,
+      updated_by_user_id,
+      source_type
+    )
+    VALUES (
+      $1, $2, $3, $4, $5::date, $6,
+      $7, $8, $9, $10, $11,
+      $12, $13, $14,
+      $15, NOW(), $16, $16, 'manual'
+    )
+    ON CONFLICT (registration_code)
+    DO NOTHING
+    RETURNING id
+  `,
         [
           values.registrationCode,
           values.fullName,
@@ -505,6 +535,9 @@ export class StudentManagementService {
           values.nationalityName,
           values.permanentAddress,
           values.currentAddress,
+          values.phoneNumber,
+          values.provinceCode,
+          values.wardCode,
           isIntake ? 'independent' : 'unknown',
           user.sub,
         ],
@@ -603,7 +636,10 @@ export class StudentManagementService {
               nationality_name = $9,
               permanent_address = $10,
               current_address = $11,
-              updated_by_user_id = $12,
+              phone_number = $12,
+              province_code = $13,
+              ward_code = $14,
+              updated_by_user_id = $15,
               updated_at = NOW()
           WHERE id = $1
         `,
@@ -619,6 +655,9 @@ export class StudentManagementService {
           values.nationalityName,
           values.permanentAddress,
           values.currentAddress,
+          values.phoneNumber,
+          values.provinceCode,
+          values.wardCode,
           user.sub,
         ],
       );
@@ -634,6 +673,8 @@ export class StudentManagementService {
         'documents',
         'existingLicenses',
         'trainingCompletionIssuer',
+        'trainingCompletionNumber',
+        'trainingCompletionIssuedDate',
       ].some((key) => Object.prototype.hasOwnProperty.call(input, key));
 
       if (containsIntakeFields) {
@@ -683,6 +724,18 @@ export class StudentManagementService {
         } else {
           const row = existing[0];
 
+          const dbDate = (value: unknown): string => {
+            if (value instanceof Date) {
+              return value.toISOString().slice(0, 10);
+            }
+
+            if (typeof value === 'string') {
+              return value.slice(0, 10);
+            }
+
+            return '';
+          };
+
           const intake = this.normalizeIntake({
             applicationType: input.applicationType ?? row.application_type,
 
@@ -698,43 +751,49 @@ export class StudentManagementService {
             certificateIssuer:
               input.certificateIssuer ?? row.certificate_issuer ?? '',
 
+            trainingCompletionIssuer:
+              input.trainingCompletionIssuer ??
+              row.training_completion_issuer ??
+              '',
+
+            trainingCompletionNumber:
+              input.trainingCompletionNumber ??
+              row.training_completion_number ??
+              '',
+
+            trainingCompletionIssuedDate:
+              input.trainingCompletionIssuedDate ??
+              dbDate(row.training_completion_issued_date),
+
             identityIssuedDate:
-              input.identityIssuedDate ?? row.identity_issued_date ?? '',
+              input.identityIssuedDate ?? dbDate(row.identity_issued_date),
 
             note: input.note ?? row.note ?? '',
 
             documents: input.documents ?? row.documents,
 
             existingLicenses: input.existingLicenses ?? row.existing_licenses,
-
-            trainingCompletionIssuer:
-              input.trainingCompletionIssuer ??
-              row.training_completion_issuer ??
-              '',
           });
 
-          /**
-           * UPDATE trực tiếp intake hiện có.
-           * Không đổi created_by_user_id.
-           * Không chuyển quyền sở hữu về SUPER_ADMIN.
-           */
           await manager.query(
             `
-            UPDATE student_intakes
-            SET updated_by_user_id = $2,
-                application_type = $3,
-                requested_license_class = $4,
-                training_license_class = $5,
-                examination_content = $6,
-                certificate_issuer = $7,
-                training_completion_issuer = $8,
-                identity_issued_date = $9::date,
-                note = $10,
-                documents = $11::jsonb,
-                existing_licenses = $12::jsonb,
-                updated_at = NOW()
-            WHERE id = $1
-          `,
+              UPDATE student_intakes
+              SET updated_by_user_id = $2,
+                  application_type = $3,
+                  requested_license_class = $4,
+                  training_license_class = $5,
+                  examination_content = $6,
+                  certificate_issuer = $7,
+                  training_completion_issuer = $8,
+                  training_completion_number = $9,
+                  training_completion_issued_date = $10::date,
+                  identity_issued_date = $11::date,
+                  note = $12,
+                  documents = $13::jsonb,
+                  existing_licenses = $14::jsonb,
+                  updated_at = NOW()
+              WHERE id = $1
+            `,
             [
               row.id,
               user.sub,
@@ -744,6 +803,8 @@ export class StudentManagementService {
               intake.examinationContent,
               intake.certificateIssuer,
               intake.trainingCompletionIssuer,
+              intake.trainingCompletionNumber,
+              intake.trainingCompletionIssuedDate,
               intake.identityIssuedDate,
               intake.note,
               intake.documents,

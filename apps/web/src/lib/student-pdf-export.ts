@@ -1,4 +1,5 @@
 import { PDFDocument, rgb, type PDFFont, type PDFPage } from "pdf-lib";
+
 import fontkit from "@pdf-lib/fontkit";
 
 import {
@@ -16,31 +17,57 @@ const TEMPLATES: Record<StudentPdfType, string> = {
 
 const FONT_PATH = "/fonts/NotoSans-Regular.ttf";
 
+const BLACK = rgb(0.08, 0.08, 0.08);
+const WHITE = rgb(1, 1, 1);
+
 type Field = {
   x: number;
   top: number;
   width: number;
   value: unknown;
   size?: number;
+  minSize?: number;
   uppercase?: boolean;
   align?: "left" | "center";
 };
 
-/**
- * Tất cả tọa độ sử dụng đơn vị point,
- * gốc tính từ góc trên bên trái trang PDF.
- *
- * Các vùng này được xác định theo hai
- * mẫu PDF A4 đã cung cấp.
- */
-
-const BLACK = rgb(0.08, 0.08, 0.08);
-const WHITE = rgb(1, 1, 1);
+const TRACKING_DOCUMENT_ROWS = [
+  {
+    type: "health_certificate",
+    label: "Giấy chứng nhận sức khỏe",
+  },
+  {
+    type: "driving_experience",
+    label: "Bản khai thời gian, số km lái xe an toàn",
+  },
+  {
+    type: "diploma",
+    label: "Bản sao văn bằng (nếu cần)",
+  },
+  {
+    type: "current_license_copy",
+    label: "Bản sao GPLX hiện có (nếu cần)",
+  },
+  {
+    type: "training_completion_certificate",
+    label: "Giấy xác nhận hoàn thành khóa đào tạo",
+  },
+  {
+    type: "exam_result_summary",
+    label: "Biên bản tổng hợp kết quả sát hạch",
+  },
+  {
+    type: "photo_3x4",
+    label: "Ảnh thẻ 3x4",
+  },
+  {
+    type: "other",
+    label: "Giấy tờ khác",
+  },
+] as const;
 
 function clean(value: unknown): string {
-  if (value === null || value === undefined) {
-    return "";
-  }
+  if (value === null || value === undefined) return "";
 
   return String(value)
     .normalize("NFC")
@@ -51,14 +78,11 @@ function clean(value: unknown): string {
 
 function dateVN(value: unknown): string {
   const text = clean(value);
-
   if (!text) return "";
 
   const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(text);
 
-  if (!match) return text;
-
-  return `${match[3]}/${match[2]}/${match[1]}`;
+  return match ? `${match[3]}/${match[2]}/${match[1]}` : text;
 }
 
 function applicationLabel(value: string | null): string {
@@ -74,8 +98,8 @@ function applicationLabel(value: string | null): string {
   }
 }
 
-function safeFileName(text: string): string {
-  return text
+function safeFileName(value: string): string {
+  return value
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/đ/g, "d")
@@ -96,54 +120,63 @@ async function loadResource(path: string): Promise<Uint8Array> {
   return new Uint8Array(await response.arrayBuffer());
 }
 
+function fitText(
+  font: PDFFont,
+  source: string,
+  width: number,
+  preferredSize: number,
+  minSize: number
+): { text: string; size: number } {
+  let text = clean(source);
+  let size = preferredSize;
+
+  const maxWidth = Math.max(1, width);
+
+  while (size > minSize && font.widthOfTextAtSize(text, size) > maxWidth) {
+    size = Math.max(minSize, size - 0.2);
+  }
+
+  if (font.widthOfTextAtSize(text, size) > maxWidth) {
+    const suffix = "...";
+
+    while (
+      text.length > 0 &&
+      font.widthOfTextAtSize(text + suffix, size) > maxWidth
+    ) {
+      text = text.slice(0, -1);
+    }
+
+    text = text.trimEnd() + suffix;
+  }
+
+  return { text, size };
+}
+
 /**
- * Điền chữ trong một vùng cố định.
+ * Tọa độ tính từ mép trên trang PDF.
  *
- * Chỉ che vùng dấu chấm của trường hiện tại.
- * Không che nhãn ở bên trái.
- * Không đè lên trường bên cạnh.
+ * Chỉ điền vào vùng trống, không che nhãn.
  */
 function fillField(page: PDFPage, font: PDFFont, field: Field): void {
   let value = clean(field.value);
-
   if (!value) return;
 
   if (field.uppercase) {
     value = value.toLocaleUpperCase("vi-VN");
   }
 
-  let fontSize = field.size ?? 9;
+  const fitted = fitText(
+    font,
+    value,
+    field.width - 6,
+    field.size ?? 11,
+    field.minSize ?? 8
+  );
 
-  // Trừ lề hai bên vùng điền.
-  const usableWidth = field.width - 6;
-
-  while (
-    fontSize > 6.2 &&
-    font.widthOfTextAtSize(value, fontSize) > usableWidth
-  ) {
-    fontSize -= 0.2;
-  }
-
-  // Không được viết tràn sang nhãn bên cạnh.
-  if (font.widthOfTextAtSize(value, fontSize) > usableWidth) {
-    const suffix = "...";
-
-    while (
-      value.length > 0 &&
-      font.widthOfTextAtSize(value + suffix, fontSize) > usableWidth
-    ) {
-      value = value.slice(0, -1);
-    }
-
-    value += suffix;
-  }
-
-  const fieldHeight = 13.2;
+  const fieldHeight = Math.max(13.2, fitted.size + 3);
 
   const rectY = page.getHeight() - field.top - fieldHeight;
 
-  // Che đúng phần dấu chấm, không dựa trên
-  // độ dài của text như phiên bản cũ.
   page.drawRectangle({
     x: field.x,
     y: rectY,
@@ -153,27 +186,33 @@ function fillField(page: PDFPage, font: PDFFont, field: Field): void {
     borderWidth: 0,
   });
 
-  const textWidth = font.widthOfTextAtSize(value, fontSize);
+  const textWidth = font.widthOfTextAtSize(fitted.text, fitted.size);
 
-  const drawX =
+  const x =
     field.align === "center"
       ? field.x + (field.width - textWidth) / 2
       : field.x + 3;
 
-  page.drawText(value, {
-    x: drawX,
-    y: rectY + (fieldHeight - fontSize) / 2 + 1,
+  page.drawText(fitted.text, {
+    x,
+    y: rectY + (fieldHeight - fitted.size) / 2 + 1,
     font,
-    size: fontSize,
+    size: fitted.size,
     color: BLACK,
   });
 }
 
-function markCell(page: PDFPage, x: number, top: number, checked: boolean) {
+/**
+ * Đánh dấu tick trong cột Đảm bảo.
+ */
+function markCell(
+  page: PDFPage,
+  x: number,
+  top: number,
+  checked: boolean
+): void {
   if (!checked) return;
 
-  // Dấu tick dạng hai nét vẽ,
-  // không phụ thuộc font ký tự.
   const y = page.getHeight() - top;
 
   page.drawLine({
@@ -209,20 +248,66 @@ function getIntake(
   return intake;
 }
 
-function hasDocument(intake: StudentIntake, ...types: string[]): boolean {
+function hasDocument(intake: StudentIntake, type: string): boolean {
+  const compatibleTypes =
+    type === "current_license_copy"
+      ? ["current_license_copy", "driving_license"]
+      : type === "health_certificate"
+      ? ["health_certificate", "medical_exam_certificate"]
+      : [type];
+
   return (
     intake.documents?.some(
-      (item) => types.includes(item.type) && item.checked === true
+      (item) => compatibleTypes.includes(item.type) && item.checked === true
     ) ?? false
   );
 }
 
+const PDF_DOCUMENT_TYPES = [
+  "health_certificate",
+  "training_completion_certificate",
+  "identity_copy",
+  "current_license_copy",
+  "student_verification",
+  "dat_verification",
+  "exam_result_summary",
+  "absent_failed_verification",
+] as const;
+
+function fillTrackingDocumentChecks(
+  page: PDFPage,
+  intake: StudentIntake
+): void {
+  const firstRowTop = 325;
+  const rowHeight = 14.3;
+  const checkX = 255;
+
+  PDF_DOCUMENT_TYPES.forEach((type, index) => {
+    const checked =
+      intake.documents?.some(
+        (item) =>
+          item.type === type &&
+          item.checked === true
+      ) ?? false;
+
+    markCell(
+      page,
+      checkX,
+      firstRowTop + index * rowHeight,
+      checked
+    );
+  });
+}
+
+/**
+ * PHIẾU THEO DÕI HỒ SƠ THÍ SINH TỰ DO
+ */
 function fillTracking(
   page: PDFPage,
   font: PDFFont,
   student: StudentDetail,
   intake: StudentIntake
-) {
+): void {
   const license = intake.existingLicenses?.[0];
 
   const examText = [
@@ -233,96 +318,129 @@ function fillTracking(
     .join(" - ");
 
   const fields: Field[] = [
-    // Hạng sát hạch tại ô phía trên.
+    /**
+     * HẠNG:
+     *
+     * Nhãn gốc kết thúc khoảng x=492.
+     * Đặt giá trị sau nhãn, không che chữ HẠNG.
+     */
     {
-      x: 508,
+      x: 496,
       top: 50,
-      width: 35,
+      width: 34,
       value: intake.requestedLicenseClass,
-      size: 10,
-      align: "center",
+      size: 11,
+      minSize: 9,
     },
 
-    // 1. Họ tên, chỉ điền trước nhãn SĐT.
     {
-      x: 170,
+      x: 168,
       top: 87,
-      width: 244,
+      width: 245,
       value: student.fullName,
-      size: 10,
+      size: 11.5,
+      minSize: 8.5,
       uppercase: true,
     },
 
-    // 2. Ngày tháng năm sinh.
     {
-      x: 199,
+      x: 456,
+      top: 87,
+      width: 115,
+      value: student.phoneNumber,
+      size: 10.5,
+      minSize: 9,
+    },
+
+    {
+      x: 179,
       top: 106,
-      width: 365,
-      value: dateVN(student.dateOfBirth),
-      size: 10,
-    },
-
-    // 3. CCCD và ngày cấp: hai vùng riêng.
-    {
-      x: 116,
-      top: 125,
-      width: 235,
-      value: student.identityNumber,
-      size: 10,
-    },
-    {
-      x: 413,
-      top: 125,
-      width: 149,
-      value: dateVN(intake.identityIssuedDate),
-      size: 9.5,
-    },
-
-    // 4. Thường trú.
-    {
-      x: 176,
-      top: 144,
       width: 388,
+      value: dateVN(student.dateOfBirth),
+      size: 11,
+    },
+
+    {
+      x: 109,
+      top: 125,
+      width: 239,
+      value: student.identityNumber,
+      size: 11,
+    },
+
+    {
+      x: 415,
+      top: 125,
+      width: 150,
+      value: dateVN(intake.identityIssuedDate),
+      size: 10.5,
+    },
+
+    {
+      x: 156,
+      top: 144,
+      width: 409,
       value: student.permanentAddress,
-      size: 9,
+      size: 10.5,
+      minSize: 8,
     },
 
-    // 5-6. Đơn vị đào tạo và số giấy xác nhận:
-    // chưa lưu trong hồ sơ, để trống.
-
-    // 7. GPLX hiện có.
+    /**
+     * Đơn vị đào tạo:
+     * Nơi xác nhận hoàn thành khóa học.
+     */
     {
-      x: 166,
+      x: 137,
+      top: 163,
+      width: 428,
+      value: intake.trainingCompletionIssuer,
+      size: 11,
+      minSize: 8,
+    },
+
+    {
+      x: 270,
+      top: 182,
+      width: 295,
+      value: intake.trainingCompletionNumber,
+      size: 11,
+      minSize: 8,
+    },
+
+    {
+      x: 156,
       top: 201,
-      width: 49,
+      width: 60,
       value: license?.licenseClass,
-      size: 9,
+      size: 10.5,
+      minSize: 9,
     },
+
     {
-      x: 337,
+      x: 320,
       top: 201,
-      width: 228,
+      width: 245,
       value: license?.number,
-      size: 9,
+      size: 11,
+      minSize: 9,
     },
 
-    // Ngày nhận hồ sơ:
-    // chỉ điền vào phần chấm phía sau nhãn.
     {
-      x: 517,
+      x: 504,
       top: 229,
-      width: 57,
+      width: 70,
       value: dateVN(intake.createdAt),
-      size: 7.3,
+      size: 9.5,
+      minSize: 8,
     },
 
-    // 8. Nội dung đăng ký sát hạch.
     {
-      x: 407,
+      x: 324,
       top: 248,
-      width: 166,
+      width: 249,
       value: examText,
-      size: 8.3,
+      size: 10.5,
+      minSize: 8,
     },
   ];
 
@@ -330,43 +448,30 @@ function fillTracking(
     fillField(page, font, field);
   }
 
-  // Thành phần hồ sơ trên mẫu gốc,
-  // đánh dấu ở giữa cột "Đảm bảo".
-  const checks = [
-    hasDocument(intake, "health_certificate", "medical_exam_certificate"),
-    hasDocument(intake, "training_completion_certificate"),
-    hasDocument(intake, "identity_copy"),
-    hasDocument(intake, "current_license_copy"),
-    hasDocument(intake, "student_verification"),
-    hasDocument(intake, "dat_verification"),
-    hasDocument(intake, "exam_result_summary"),
-    hasDocument(intake, "absent_failed_verification"),
-  ];
+  // Đồng bộ toàn bộ danh sách giấy tờ với form.
+  fillTrackingDocumentChecks(page, intake);
 
-  // Hàng 1 đến 8 trong bảng.
-  const firstRowTop = 325;
-  const rowHeight = 14.3;
-
-  checks.forEach((checked, index) => {
-    markCell(page, 255, firstRowTop + index * rowHeight, checked);
-  });
-
-  // Không tự điền kết quả, duyệt hồ sơ, chữ ký.
+  /**
+   * Không tự điền:
+   * - Đơn vị tổ chức sát hạch
+   * - Kết quả sát hạch
+   * - Ngày thi đề xuất
+   * - Trung tâm, thư ký
+   * - Kết quả xử lý và phê duyệt
+   */
 }
 
+/**
+ * BIÊN BẢN KIỂM TRA HỒ SƠ
+ *
+ * Giữ nguyên nghiệp vụ của mẫu này.
+ */
 function fillInspection(
   page: PDFPage,
   font: PDFFont,
   student: StudentDetail,
   intake: StudentIntake
-) {
-  /**
-   * Chỉ điền khối "Danh sách thông tin
-   * hồ sơ thí sinh dự thi sát hạch".
-   *
-   * Các nhãn "Sinh ngày", "được cấp ngày",
-   * "tại" phải được giữ nguyên.
-   */
+): void {
   const fields: Field[] = [
     {
       x: 181,
@@ -374,6 +479,7 @@ function fillInspection(
       width: 226,
       value: student.fullName,
       size: 9.5,
+      minSize: 6.2,
       uppercase: true,
     },
     {
@@ -382,6 +488,7 @@ function fillInspection(
       width: 69,
       value: dateVN(student.dateOfBirth),
       size: 8,
+      minSize: 6.2,
     },
     {
       x: 173,
@@ -389,6 +496,7 @@ function fillInspection(
       width: 178,
       value: student.identityNumber,
       size: 9,
+      minSize: 6.2,
     },
     {
       x: 454,
@@ -396,25 +504,24 @@ function fillInspection(
       width: 88,
       value: dateVN(intake.identityIssuedDate),
       size: 8,
+      minSize: 6.2,
     },
     {
-      x: 345,
+      x: 318,
       top: 607,
-      width: 45,
-      value: intake.trainingLicenseClass,
+      width: 70,
+      value: intake.requestedLicenseClass || intake.trainingLicenseClass,
       size: 9,
+      minSize: 6.2,
     },
   ];
 
   for (const field of fields) {
     fillField(page, font, field);
   }
-
-  // Không điền danh sách hợp lệ, tổng số,
-  // kết luận kiểm tra hoặc chữ ký cán bộ.
 }
 
-function download(pdfBytes: Uint8Array, filename: string) {
+function download(pdfBytes: Uint8Array, filename: string): void {
   const bytes = new Uint8Array(pdfBytes.length);
   bytes.set(pdfBytes);
 
@@ -423,8 +530,8 @@ function download(pdfBytes: Uint8Array, filename: string) {
   });
 
   const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
 
+  const link = document.createElement("a");
   link.href = url;
   link.download = filename;
 
@@ -460,13 +567,6 @@ export async function exportStudentPdf(
 
   document.registerFontkit(fontkit);
 
-  /**
-   * Không subset font.
-   *
-   * Cách này làm file PDF lớn hơn một chút,
-   * nhưng giảm rủi ro ký tự Unicode bị
-   * tách rời hoặc hiển thị sai khi render.
-   */
   const font = await document.embedFont(fontBytes, {
     subset: false,
   });

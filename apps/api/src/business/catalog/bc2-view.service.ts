@@ -626,6 +626,9 @@ export class Bc2ViewService {
           s.nationality_name AS "nationalityName",
           s.permanent_address AS "permanentAddress",
           s.current_address AS "currentAddress",
+          s.phone_number AS "phoneNumber",
+          s.province_code AS "provinceCode",
+          s.ward_code AS "wardCode",
 
           s.created_by_user_id AS "createdByUserId",
           s.updated_by_user_id AS "updatedByUserId",
@@ -833,10 +836,13 @@ export class Bc2ViewService {
             si.examination_content
               AS "examinationContent",
 
+            
             si.certificate_issuer AS "certificateIssuer",
+            si.training_completion_number AS "trainingCompletionNumber",
+            si.training_completion_issued_date::text
+              AS "trainingCompletionIssuedDate",
             si.training_completion_issuer AS "trainingCompletionIssuer",
-            si.identity_issued_date::text
-              AS "identityIssuedDate",
+            si.identity_issued_date::text AS "identityIssuedDate",
 
             si.note,
             si.documents,
