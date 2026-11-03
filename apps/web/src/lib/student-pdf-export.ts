@@ -285,17 +285,10 @@ function fillTrackingDocumentChecks(
   PDF_DOCUMENT_TYPES.forEach((type, index) => {
     const checked =
       intake.documents?.some(
-        (item) =>
-          item.type === type &&
-          item.checked === true
+        (item) => item.type === type && item.checked === true
       ) ?? false;
 
-    markCell(
-      page,
-      checkX,
-      firstRowTop + index * rowHeight,
-      checked
-    );
+    markCell(page, checkX, firstRowTop + index * rowHeight, checked);
   });
 }
 
@@ -466,59 +459,101 @@ function fillTracking(
  *
  * Giữ nguyên nghiệp vụ của mẫu này.
  */
+
 function fillInspection(
   page: PDFPage,
   font: PDFFont,
   student: StudentDetail,
   intake: StudentIntake
 ): void {
+  /**
+   * BIÊN BẢN KIỂM TRA HỒ SƠ
+   *
+   * Tọa độ đã căn theo mẫu PDF gốc A4.
+   *
+   * Chỉ điền thông tin vào vùng dấu chấm.
+   * Không che các nhãn:
+   * - Họ và tên
+   * - Sinh ngày
+   * - Số CCCD
+   * - được cấp ngày
+   * - hạng
+   * - tại
+   *
+   * Không thay đổi fillTracking().
+   */
+
   const fields: Field[] = [
     {
+      // Họ và tên
       x: 181,
-      top: 564,
+      top: 563.5,
       width: 226,
       value: student.fullName,
-      size: 9.5,
-      minSize: 6.2,
+      size: 11,
+      minSize: 8.5,
       uppercase: true,
     },
     {
-      x: 474,
-      top: 564,
-      width: 69,
+      // Ngày sinh
+      x: 476,
+      top: 563.5,
+      width: 65,
       value: dateVN(student.dateOfBirth),
-      size: 8,
-      minSize: 6.2,
+      size: 10.2,
+      minSize: 9,
     },
     {
-      x: 173,
-      top: 586,
-      width: 178,
+      // Số CCCD
+      x: 179,
+      top: 585,
+      width: 173,
       value: student.identityNumber,
-      size: 9,
-      minSize: 6.2,
+      size: 11,
+      minSize: 9,
     },
     {
-      x: 454,
-      top: 586,
-      width: 88,
+      // Ngày cấp CCCD
+      x: 446,
+      top: 585,
+      width: 95,
       value: dateVN(intake.identityIssuedDate),
-      size: 8,
-      minSize: 6.2,
+      size: 10.2,
+      minSize: 9,
     },
     {
-      x: 318,
-      top: 607,
-      width: 70,
-      value: intake.requestedLicenseClass || intake.trainingLicenseClass,
-      size: 9,
-      minSize: 6.2,
+      // Hạng đào tạo
+      x: 343,
+      top: 606.5,
+      width: 47,
+      value: intake.trainingLicenseClass || intake.requestedLicenseClass,
+      size: 11,
+      minSize: 9,
+    },
+    {
+      // Nơi đào tạo
+      x: 418,
+      top: 606.5,
+      width: 123,
+      value: intake.trainingCompletionIssuer,
+      size: 10,
+      minSize: 8,
     },
   ];
 
   for (const field of fields) {
     fillField(page, font, field);
   }
+
+  /**
+   * Giữ trống các thông tin chưa xác nhận:
+   *
+   * - Thời gian lập biên bản
+   * - Danh sách cán bộ kiểm tra
+   * - Số hồ sơ hợp lệ và không hợp lệ
+   * - Bảng tổng hợp kỳ sát hạch
+   * - Chữ ký
+   */
 }
 
 function download(pdfBytes: Uint8Array, filename: string): void {
