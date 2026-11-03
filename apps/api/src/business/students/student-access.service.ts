@@ -40,12 +40,6 @@ export class StudentAccessService {
     }
   }
 
-  /**
-   * SQL dùng trong truy vấn danh sách.
-   *
-   * Chỉ sử dụng sau khi đã xác thực user bằng JwtAuthGuard.
-   * Tham số userId là ID lấy từ JWT, không lấy từ query string.
-   */
   getOwnershipCondition(
     user: AuthUser,
     studentAlias = 's',
@@ -59,13 +53,14 @@ export class StudentAccessService {
 
     return {
       sql: `
-          EXISTS (
-            SELECT 1
-            FROM student_intakes intake_access
-            WHERE intake_access.student_id = ${studentAlias}.id
-              AND intake_access.created_by_user_id = $${parameterIndex}::int
-          )
-        `,
+        EXISTS (
+          SELECT 1
+          FROM student_intakes intake_access
+          WHERE intake_access.student_id = ${studentAlias}.id
+            AND intake_access.created_by_user_id =
+              $${parameterIndex}::int
+        )
+      `,
       params: [user.sub],
     };
   }
@@ -81,25 +76,24 @@ export class StudentAccessService {
 
     const rows: Array<{ id: number }> = await executor.query(
       `
-          SELECT s.id
-          FROM students s
-          WHERE s.id = $1
-            AND (
-              $2::boolean = FALSE
-              OR EXISTS (
-                SELECT 1
-                FROM student_intakes si
-                WHERE si.student_id = s.id
-                  AND si.created_by_user_id = $3::int
-              )
+        SELECT s.id
+        FROM students s
+        WHERE s.id = $1
+          AND (
+            $2::boolean = FALSE
+            OR EXISTS (
+              SELECT 1
+              FROM student_intakes si
+              WHERE si.student_id = s.id
+                AND si.created_by_user_id = $3::int
             )
-          LIMIT 1
-        `,
+          )
+        LIMIT 1
+      `,
       [studentId, this.isSystemAdmin(user), user.sub],
     );
 
     if (!rows.length) {
-      // Không tiết lộ sự tồn tại của hồ sơ thuộc nhân viên khác.
       throw new NotFoundException('Không tìm thấy hồ sơ học viên.');
     }
   }
@@ -110,6 +104,16 @@ export class StudentAccessService {
     manager?: EntityManager,
   ): Promise<void> {
     await this.assertCanView(studentId, user, manager);
+
+    /**
+     * SUPER_ADMIN được phép điều chỉnh học viên
+     * kể cả khi đã có BC1 hoặc BC2.
+     *
+     * Quyền này chỉ mở cho SUPER_ADMIN.
+     */
+    if (this.isSuperAdmin(user)) {
+      return;
+    }
 
     const executor = manager ?? this.db;
 
@@ -131,12 +135,18 @@ export class StudentAccessService {
     }
 
     if (this.isSystemAdmin(user)) {
-      const rows: Array<{ source_type: string }> = await executor.query(
-        'SELECT source_type FROM students WHERE id = $1',
+      const studentRows: Array<{
+        source_type: string;
+      }> = await executor.query(
+        `
+          SELECT source_type
+          FROM students
+          WHERE id = $1
+        `,
         [studentId],
       );
 
-      if (rows[0]?.source_type !== 'manual') {
+      if (studentRows[0]?.source_type !== 'manual') {
         throw new ForbiddenException(
           'Hồ sơ đã có dữ liệu nguồn. Vui lòng liên hệ quản trị viên để điều chỉnh.',
         );

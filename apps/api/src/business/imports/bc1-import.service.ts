@@ -242,66 +242,213 @@ export class Bc1ImportService {
       let skippedEnrollments = 0;
 
       for (const student of document.students) {
-        const insertedStudents = await manager.query(
+        let studentId: number | null = null;
+
+        const identityNumber =
+          student.identityNumber?.replace(/\s+/g, '').trim() ?? '';
+
+        const licenseClass =
+          document.course.licenseClass?.trim().toUpperCase() ?? '';
+
+        /**
+         * 1. Ưu tiên đối chiếu mã đăng ký BC1.
+         */
+        const byRegistration: Array<{
+          id: number;
+          identityNumber: string | null;
+        }> = await manager.query(
           `
-            INSERT INTO students (
-              registration_code,
-              full_name,
-              family_name,
-              given_name,
-              date_of_birth,
-              gender,
-              identity_number,
-              nationality_code,
-              nationality_name,
-              permanent_address,
-              current_address
-            )
-            VALUES (
-              $1, $2, $3, $4, $5, $6,
-              $7, $8, $9, $10, $11
-            )
-            ON CONFLICT (registration_code) DO NOTHING
-            RETURNING id
-          `,
-          [
-            student.registrationCode,
-            student.fullName,
-            student.familyName,
-            student.givenName,
-            student.dateOfBirth,
-            student.gender,
-            student.identityNumber,
-            student.nationalityCode,
-            student.nationalityName,
-            student.permanentAddress,
-            student.currentAddress,
-          ],
+      SELECT
+        id,
+        identity_number AS "identityNumber"
+      FROM students
+      WHERE registration_code = $1
+      LIMIT 1
+      FOR UPDATE
+    `,
+          [student.registrationCode],
         );
 
-        let studentId: number;
+        if (byRegistration.length) {
+          const existing = byRegistration[0];
 
-        if (insertedStudents.length) {
-          studentId = Number(insertedStudents[0].id);
-          newStudents++;
-        } else {
-          const existingStudents = await manager.query(
-            `
-              SELECT id
-              FROM students
-              WHERE registration_code = $1
-            `,
-            [student.registrationCode],
-          );
+          const existingIdentity =
+            existing.identityNumber?.replace(/\s+/g, '').trim() ?? '';
 
-          if (!existingStudents.length) {
+          if (
+            identityNumber &&
+            existingIdentity &&
+            identityNumber !== existingIdentity
+          ) {
             throw new ConflictException(
-              `Không tìm thấy hồ sơ học viên ` + `${student.registrationCode}.`,
+              `Mã đăng ký ${student.registrationCode} ` +
+                'đã tồn tại nhưng CCCD không khớp.',
             );
           }
 
-          studentId = Number(existingStudents[0].id);
+          studentId = Number(existing.id);
         }
+
+        /**
+         * 2. Khi mã BC1 chưa có:
+         *    tìm học viên nhập tay theo CCCD và hạng thi.
+         *
+         * Chỉ ghép khi có đúng một kết quả.
+         */
+        if (studentId === null && identityNumber && licenseClass) {
+          const matched: Array<{ id: number }> = await manager.query(
+            `
+        SELECT s.id
+        FROM students s
+        WHERE s.source_type = 'manual'
+          AND REGEXP_REPLACE(
+            COALESCE(s.identity_number, ''),
+            '\\s+',
+            '',
+            'g'
+          ) = $1
+          AND EXISTS (
+            SELECT 1
+            FROM student_intakes si
+            WHERE si.student_id = s.id
+              AND (
+                UPPER(TRIM(
+                  COALESCE(si.requested_license_class, '')
+                )) = $2
+                OR UPPER(TRIM(
+                  COALESCE(si.training_license_class, '')
+                )) = $2
+              )
+          )
+        ORDER BY s.id
+        LIMIT 2
+        FOR UPDATE OF s
+      `,
+            [identityNumber, licenseClass],
+          );
+
+          if (matched.length > 1) {
+            throw new ConflictException(
+              `CCCD ${identityNumber}, hạng ${licenseClass} ` +
+                'trùng nhiều hồ sơ nhập tay. ' +
+                'Cần đối chiếu trước khi import BC1.',
+            );
+          }
+
+          if (matched.length === 1) {
+            studentId = Number(matched[0].id);
+
+            /**
+             * Giữ nguyên ID, mã đăng ký TD-...,
+             * các hồ sơ tiếp nhận và phân công cũ.
+             *
+             * Bổ sung thông tin cá nhân từ BC1,
+             * không dùng giá trị rỗng để xóa dữ liệu có sẵn.
+             */
+            await manager.query(
+              `
+          UPDATE students
+          SET full_name = COALESCE(
+                NULLIF($2::text, ''), full_name
+              ),
+              family_name = COALESCE(
+                NULLIF($3::text, ''), family_name
+              ),
+              given_name = COALESCE(
+                NULLIF($4::text, ''), given_name
+              ),
+              date_of_birth = COALESCE(
+                $5::date, date_of_birth
+              ),
+              gender = COALESCE(
+                NULLIF($6::text, ''), gender
+              ),
+              nationality_code = COALESCE(
+                NULLIF($7::text, ''), nationality_code
+              ),
+              nationality_name = COALESCE(
+                NULLIF($8::text, ''), nationality_name
+              ),
+              permanent_address = COALESCE(
+                NULLIF($9::text, ''), permanent_address
+              ),
+              current_address = COALESCE(
+                NULLIF($10::text, ''), current_address
+              ),
+              updated_at = NOW()
+          WHERE id = $1
+        `,
+              [
+                studentId,
+                student.fullName ?? '',
+                student.familyName ?? '',
+                student.givenName ?? '',
+                student.dateOfBirth || null,
+                student.gender ?? '',
+                student.nationalityCode ?? '',
+                student.nationalityName ?? '',
+                student.permanentAddress ?? '',
+                student.currentAddress ?? '',
+              ],
+            );
+          }
+        }
+
+        /**
+         * 3. Chưa có học viên phù hợp:
+         *    tạo mới theo luồng BC1 đang sử dụng.
+         */
+        if (studentId === null) {
+          const insertedStudents: Array<{ id: number }> = await manager.query(
+            `
+          INSERT INTO students (
+            registration_code,
+            full_name,
+            family_name,
+            given_name,
+            date_of_birth,
+            gender,
+            identity_number,
+            nationality_code,
+            nationality_name,
+            permanent_address,
+            current_address
+          )
+          VALUES (
+            $1, $2, $3, $4, $5, $6,
+            $7, $8, $9, $10, $11
+          )
+          ON CONFLICT (registration_code) DO NOTHING
+          RETURNING id
+        `,
+            [
+              student.registrationCode,
+              student.fullName,
+              student.familyName,
+              student.givenName,
+              student.dateOfBirth,
+              student.gender,
+              student.identityNumber,
+              student.nationalityCode,
+              student.nationalityName,
+              student.permanentAddress,
+              student.currentAddress,
+            ],
+          );
+
+          if (insertedStudents.length) {
+            studentId = Number(insertedStudents[0].id);
+            newStudents++;
+          } else {
+            throw new ConflictException(
+              `Mã đăng ký ${student.registrationCode} ` +
+                'đã được tạo trong một giao dịch khác. ' +
+                'Vui lòng kiểm tra và import lại.',
+            );
+          }
+        }
+
+        // Giữ nguyên các phần lưu ảnh và ghi danh phía dưới.
 
         const photoBase64 = photos.get(student.registrationCode);
 

@@ -33,6 +33,7 @@ import {
   AddOutlined,
   CloseOutlined,
   EditOutlined,
+  FileDownloadOutlined,
   FilePresentOutlined,
   RefreshOutlined,
   SearchOutlined,
@@ -61,6 +62,7 @@ import type { StudentFormData } from "@/lib/student-management";
 import { API_URL } from "@/lib/auth";
 import { StudentPdfActions } from "@/components/students/StudentPdfActions";
 import { StudentScanDialog } from "@/components/students/StudentScanDialog";
+import { exportPagedExcel } from "@/lib/export-excel";
 
 type Bc2Status = "all" | "has_bc2" | "no_bc2";
 
@@ -297,6 +299,7 @@ function StudentTable({
   onEdit,
   onDetail,
   onScan,
+  isSuperAdmin,
 }: {
   students: StudentRow[];
   loading: boolean;
@@ -305,6 +308,7 @@ function StudentTable({
   onEdit: (id: number) => void;
   onDetail: (id: number) => void;
   onScan: (student: StudentRow) => void;
+  isSuperAdmin: boolean;
 }) {
   return (
     <TableContainer
@@ -364,7 +368,8 @@ function StudentTable({
             const hasBc2 = student.hasBc2 === true || bc2Reports.length > 0;
 
             const canEdit =
-              !hasBc2 && (!isSystemAdmin || student.sourceType === "manual");
+              isSuperAdmin ||
+              (!hasBc2 && (!isSystemAdmin || student.sourceType === "manual"));
 
             const canManageScan = Boolean(student.intakeUser);
 
@@ -1351,6 +1356,8 @@ export default function StudentsPage() {
 
   const [schoolsError, setSchoolsError] = useState("");
 
+  const [exporting, setExporting] = useState(false);
+
   useEffect(() => {
     if (!accessToken || isSystemAdmin) {
       setSchools([]);
@@ -1744,6 +1751,193 @@ export default function StudentsPage() {
     }
   };
 
+  async function handleExportExcel() {
+    if (!accessToken || exporting) return;
+
+    setExporting(true);
+    setError("");
+
+    try {
+      const count = await exportPagedExcel<StudentRow>({
+        filename: "Danh_sach_hoc_vien.xlsx",
+        sheetName: "Hoc vien",
+        columns: [
+          {
+            header: "Mã đăng ký",
+            key: "registrationCode",
+            width: 30,
+            value: (row) => row.registrationCode,
+          },
+          {
+            header: "Họ và tên",
+            key: "fullName",
+            width: 35,
+            value: (row) => row.fullName,
+          },
+          {
+            header: "Ngày sinh",
+            key: "dateOfBirth",
+            width: 18,
+            value: (row) => formatDate(row.dateOfBirth),
+          },
+          {
+            header: "CCCD/CMND",
+            key: "identityNumber",
+            width: 23,
+            value: (row) => row.identityNumber,
+          },
+          {
+            header: "Nguồn dữ liệu",
+            key: "sourceType",
+            width: 20,
+            value: (row) =>
+              row.sourceType === "manual" ? "Nhập thủ công" : "Import",
+          },
+          {
+            header: "Nhân viên tiếp nhận",
+            key: "intakeUser",
+            width: 30,
+            value: (row) => row.intakeUser?.fullName ?? "",
+          },
+          {
+            header: "Số khóa học",
+            key: "courseCount",
+            width: 17,
+            value: (row) => row.courseCount,
+          },
+          {
+            header: "Mã khóa học",
+            key: "courses",
+            width: 35,
+            value: (row) => row.courses.map((course) => course.code).join(", "),
+          },
+          {
+            header: "Trạng thái BC2",
+            key: "hasBc2",
+            width: 18,
+            value: (row) => (row.hasBc2 ? "Đã có BC2" : "Chưa có BC2"),
+          },
+          {
+            header: "Số kỳ sát hạch",
+            key: "examSessionCount",
+            width: 19,
+            value: (row) => row.examSessionCount,
+          },
+          {
+            header: "Số kỳ có kết quả",
+            key: "examResultCount",
+            width: 19,
+            value: (row) => row.examResultCount,
+          },
+          {
+            header: "Kỳ sát hạch gần nhất",
+            key: "latestExam",
+            width: 26,
+            value: (row) => row.latestExam?.sessionCode ?? "",
+          },
+          {
+            header: "Ngày thi gần nhất",
+            key: "latestExamDate",
+            width: 20,
+            value: (row) => formatDate(row.latestExam?.examDate),
+          },
+          {
+            header: "Kết quả sát hạch",
+            key: "examStatus",
+            width: 20,
+            value: (row) => {
+              switch (row.examStatus) {
+                case "passed":
+                  return "Đã đậu";
+                case "failed":
+                  return "Chưa đậu";
+                case "pending":
+                  return "Chờ kết quả";
+                default:
+                  return "Chưa dự thi";
+              }
+            },
+          },
+          {
+            header: "Từng vắng",
+            key: "everAbsent",
+            width: 15,
+            value: (row) => (row.everAbsent ? "Có" : "Không"),
+          },
+        ],
+
+        fetchPage: async (nextPage, limit) => {
+          const filters = {
+            page: nextPage,
+            limit,
+            search,
+            schoolId: isSystemAdmin ? undefined : selectedSchoolId || undefined,
+            courseId: isSystemAdmin ? undefined : selectedCourseId || undefined,
+            bc2Status: isSystemAdmin ? ("all" as const) : status,
+            examStatus,
+          };
+
+          if (!isSystemAdmin && bc1Code) {
+            const query = new URLSearchParams({
+              page: String(nextPage),
+              limit: String(limit),
+              bc1Code,
+              bc2Status: filters.bc2Status,
+              examStatus,
+            });
+
+            if (search) {
+              query.set("search", search);
+            }
+
+            if (filters.schoolId) {
+              query.set("schoolId", String(filters.schoolId));
+            }
+
+            if (filters.courseId) {
+              query.set("courseId", String(filters.courseId));
+            }
+
+            const response = await fetch(
+              `${API_URL}/bc2-view/students?${query}`,
+              {
+                method: "GET",
+                headers: {
+                  Authorization: `Bearer ${accessToken}`,
+                },
+                credentials: "include",
+                cache: "no-store",
+              }
+            );
+
+            if (!response.ok) {
+              const body = await response.json().catch(() => null);
+
+              throw new Error(
+                typeof body?.message === "string"
+                  ? body.message
+                  : "Không thể xuất danh sách học viên."
+              );
+            }
+
+            return (await response.json()) as StudentsPageResult;
+          }
+
+          return listStudents(accessToken, filters);
+        },
+      });
+
+      // Có thể thay bằng snackbar nếu trang đã dùng sẵn.
+      window.alert(`Đã xuất ${count.toLocaleString("vi-VN")} học viên.`);
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Không thể xuất Excel học viên."
+      );
+    } finally {
+      setExporting(false);
+    }
+  }
+
   if (authLoading) {
     return (
       <Box
@@ -1807,6 +2001,16 @@ export default function StudentsPage() {
             {isSystemAdmin ? "Tiếp nhận thí sinh tự do" : "Thêm học viên"}
           </Button>
 
+          <Button
+            variant="outlined"
+            color="success"
+            startIcon={<FileDownloadOutlined />}
+            disabled={exporting || fetching || !accessToken}
+            onClick={() => void handleExportExcel()}
+            sx={{ textTransform: "none" }}
+          >
+            {exporting ? "Đang xuất..." : "Xuất Excel"}
+          </Button>
           <Button
             variant="outlined"
             startIcon={<RefreshOutlined />}
@@ -2069,6 +2273,7 @@ export default function StudentsPage() {
             onEdit={(id) => void openEditStudent(id)}
             onDetail={setSelectedId}
             onScan={setScanStudent}
+            isSuperAdmin={isSuperAdmin}
           />
         )}
 

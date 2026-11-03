@@ -696,7 +696,16 @@ export function IndependentExamWorkspace() {
                 label="Ngày sát hạch"
                 value={examDate}
                 onChange={(event) => setExamDate(event.target.value)}
-                slotProps={{ inputLabel: { shrink: true } }}
+                slotProps={{
+                  inputLabel: { shrink: true },
+                  htmlInput: {
+                    min: new Date(
+                      Date.now() - new Date().getTimezoneOffset() * 60000
+                    )
+                      .toISOString()
+                      .slice(0, 10),
+                  },
+                }}
               />
             </Stack>
 

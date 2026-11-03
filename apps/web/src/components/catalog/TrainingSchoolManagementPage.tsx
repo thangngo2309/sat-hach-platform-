@@ -7,6 +7,7 @@ import {
   AddOutlined,
   ArrowForwardOutlined,
   EditOutlined,
+  FileDownloadOutlined,
   FileUploadOutlined,
   HistoryOutlined,
   RefreshOutlined,
@@ -54,6 +55,7 @@ import {
   type SchoolImportHistory,
   type SchoolImportPreview,
 } from "@/lib/training-school-management";
+import { exportPagedExcel } from "@/lib/export-excel";
 
 const EMPTY_FORM: SchoolForm = {
   code: "",
@@ -149,6 +151,8 @@ export function TrainingSchoolManagementPage() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyRows, setHistoryRows] = useState<SchoolImportHistory[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+
+  const [exporting, setExporting] = useState(false);
 
   const load = useCallback(async () => {
     if (!accessToken || !canManage) return;
@@ -331,6 +335,93 @@ export function TrainingSchoolManagementPage() {
     }
   }
 
+  async function handleExportExcel() {
+    if (!accessToken || !canManage || exporting) return;
+
+    setExporting(true);
+    setError("");
+    setSuccess("");
+
+    try {
+      const count = await exportPagedExcel<ManagedTrainingSchool>({
+        filename: "Danh_sach_co_so_dao_tao.xlsx",
+        sheetName: "Co so dao tao",
+        columns: [
+          {
+            header: "Mã CSĐT",
+            key: "code",
+            width: 18,
+            value: (row) => row.code,
+          },
+          {
+            header: "Tên cơ sở đào tạo",
+            key: "name",
+            width: 48,
+            value: (row) => row.name,
+          },
+          {
+            header: "Địa điểm đào tạo",
+            key: "address",
+            width: 50,
+            value: (row) => row.address,
+          },
+          {
+            header: "Mã tỉnh/thành",
+            key: "provinceCode",
+            width: 18,
+            value: (row) => row.provinceCode,
+          },
+          {
+            header: "Tỉnh/thành phố",
+            key: "provinceName",
+            width: 30,
+            value: (row) => row.provinceName,
+          },
+          {
+            header: "Trạng thái",
+            key: "status",
+            width: 20,
+            value: (row) => (row.isActive ? "Đang hiệu lực" : "Ngừng hiệu lực"),
+          },
+          {
+            header: "Nguồn dữ liệu",
+            key: "source",
+            width: 20,
+            value: (row) => sourceLabel(row.infoSource),
+          },
+          {
+            header: "Số khóa học",
+            key: "courseCount",
+            width: 16,
+            value: (row) => row.courseCount ?? 0,
+          },
+          {
+            header: "Số ghi danh",
+            key: "enrollmentCount",
+            width: 16,
+            value: (row) => row.enrollmentCount ?? 0,
+          },
+        ],
+        fetchPage: (nextPage, limit) =>
+          listManagedSchools(accessToken, {
+            page: nextPage,
+            limit,
+            search,
+          }),
+      });
+
+      setSuccess(`Đã xuất ${count.toLocaleString("vi-VN")} cơ sở đào tạo.`);
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Không thể xuất Excel cơ sở đào tạo."
+      );
+    } finally {
+      setExporting(false);
+    }
+  }
+
   if (!canManage) {
     return (
       <Alert severity="error">Tài khoản không có quyền quản lý CSĐT.</Alert>
@@ -384,6 +475,16 @@ export function TrainingSchoolManagementPage() {
               width: "100%",
             }}
           >
+            <Button
+              variant="outlined"
+              color="success"
+              startIcon={<FileDownloadOutlined />}
+              disabled={exporting || loading}
+              onClick={() => void handleExportExcel()}
+              sx={actionButtonSx}
+            >
+              {exporting ? "Đang xuất..." : "Xuất Excel"}
+            </Button>
             <TextField
               fullWidth
               size="small"

@@ -637,46 +637,120 @@ export class StudentManagementService {
       ].some((key) => Object.prototype.hasOwnProperty.call(input, key));
 
       if (containsIntakeFields) {
+        const isSuperAdmin = user.role === UserRole.SUPER_ADMIN;
+
+        /**
+         * SUPER_ADMIN chọn được intake của nhân viên khác.
+         * Ưu tiên intake do chính mình tạo nếu tồn tại.
+         *
+         * SYSTEM_ADMIN vẫn chỉ được cập nhật intake
+         * thuộc tài khoản của mình.
+         */
         const existing = await manager.query(
           `
-            SELECT *
-            FROM student_intakes
-            WHERE student_id = $1
-              AND created_by_user_id = $2
-          `,
-          [id, user.sub],
+      SELECT *
+      FROM student_intakes
+      WHERE student_id = $1
+        AND (
+          $2::boolean = TRUE
+          OR created_by_user_id = $3
+        )
+      ORDER BY
+        (created_by_user_id = $3) DESC,
+        created_at DESC,
+        id DESC
+      LIMIT 1
+      FOR UPDATE
+    `,
+          [id, isSuperAdmin, user.sub],
         );
 
         if (!existing.length) {
-          throw new NotFoundException(
-            'Không tìm thấy hồ sơ tiếp nhận của tài khoản.',
+          /**
+           * Học viên chỉ có dữ liệu XML BC1/BC2
+           * có thể không có student_intakes.
+           *
+           * SUPER_ADMIN vẫn được sửa thông tin
+           * cá nhân trong bảng students.
+           *
+           * Không tự tạo intake giả cho học viên XML.
+           */
+          if (!isSuperAdmin) {
+            throw new NotFoundException(
+              'Không tìm thấy hồ sơ tiếp nhận của tài khoản.',
+            );
+          }
+        } else {
+          const row = existing[0];
+
+          const intake = this.normalizeIntake({
+            applicationType: input.applicationType ?? row.application_type,
+
+            requestedLicenseClass:
+              input.requestedLicenseClass ?? row.requested_license_class ?? '',
+
+            trainingLicenseClass:
+              input.trainingLicenseClass ?? row.training_license_class ?? '',
+
+            examinationContent:
+              input.examinationContent ?? row.examination_content ?? '',
+
+            certificateIssuer:
+              input.certificateIssuer ?? row.certificate_issuer ?? '',
+
+            identityIssuedDate:
+              input.identityIssuedDate ?? row.identity_issued_date ?? '',
+
+            note: input.note ?? row.note ?? '',
+
+            documents: input.documents ?? row.documents,
+
+            existingLicenses: input.existingLicenses ?? row.existing_licenses,
+
+            trainingCompletionIssuer:
+              input.trainingCompletionIssuer ??
+              row.training_completion_issuer ??
+              '',
+          });
+
+          /**
+           * UPDATE trực tiếp intake hiện có.
+           * Không đổi created_by_user_id.
+           * Không chuyển quyền sở hữu về SUPER_ADMIN.
+           */
+          await manager.query(
+            `
+            UPDATE student_intakes
+            SET updated_by_user_id = $2,
+                application_type = $3,
+                requested_license_class = $4,
+                training_license_class = $5,
+                examination_content = $6,
+                certificate_issuer = $7,
+                training_completion_issuer = $8,
+                identity_issued_date = $9::date,
+                note = $10,
+                documents = $11::jsonb,
+                existing_licenses = $12::jsonb,
+                updated_at = NOW()
+            WHERE id = $1
+          `,
+            [
+              row.id,
+              user.sub,
+              intake.applicationType,
+              intake.requestedLicenseClass,
+              intake.trainingLicenseClass,
+              intake.examinationContent,
+              intake.certificateIssuer,
+              intake.trainingCompletionIssuer,
+              intake.identityIssuedDate,
+              intake.note,
+              intake.documents,
+              intake.existingLicenses,
+            ],
           );
         }
-
-        const row = existing[0];
-
-        const intake = this.normalizeIntake({
-          applicationType: input.applicationType ?? row.application_type,
-          requestedLicenseClass:
-            input.requestedLicenseClass ?? row.requested_license_class ?? '',
-          trainingLicenseClass:
-            input.trainingLicenseClass ?? row.training_license_class ?? '',
-          examinationContent:
-            input.examinationContent ?? row.examination_content ?? '',
-          certificateIssuer:
-            input.certificateIssuer ?? row.certificate_issuer ?? '',
-          identityIssuedDate:
-            input.identityIssuedDate ?? row.identity_issued_date ?? '',
-          note: input.note ?? row.note ?? '',
-          documents: input.documents ?? row.documents,
-          existingLicenses: input.existingLicenses ?? row.existing_licenses,
-          trainingCompletionIssuer:
-            input.trainingCompletionIssuer ??
-            row.training_completion_issuer ??
-            '',
-        });
-
-        await this.saveIntake(manager, id, user.sub, intake);
       }
 
       if (photo) {

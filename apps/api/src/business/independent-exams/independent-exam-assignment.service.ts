@@ -260,6 +260,28 @@ export class IndependentExamAssignmentService {
     const secretaryUserId = positiveId(input.secretaryUserId, 'ID thư ký');
 
     const date = examDate(input.examDate);
+
+    const formatter = new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Asia/Ho_Chi_Minh',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    });
+
+    const parts = formatter.formatToParts(new Date());
+
+    const year = parts.find((p) => p.type === 'year')?.value;
+    const month = parts.find((p) => p.type === 'month')?.value;
+    const day = parts.find((p) => p.type === 'day')?.value;
+
+    const today = `${year}-${month}-${day}`;
+
+    if (date < today) {
+      throw new BadRequestException(
+        'Không được phân công ngày sát hạch trong quá khứ.',
+      );
+    }
+
     const sessionCode = textValue(input.examSessionCode, 100);
     const note = textValue(input.note, 2000);
 

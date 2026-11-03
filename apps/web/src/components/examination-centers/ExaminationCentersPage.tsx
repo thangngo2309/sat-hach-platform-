@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   AddOutlined,
   EditOutlined,
+  FileDownloadOutlined,
   RefreshOutlined,
   SearchOutlined,
 } from "@mui/icons-material";
@@ -50,6 +51,7 @@ import {
 } from "@/lib/examination-centers";
 
 import type { PageResult } from "@/lib/catalog";
+import { exportPagedExcel } from "@/lib/export-excel";
 
 const PAGE_SIZE = 20;
 
@@ -86,6 +88,8 @@ export function ExaminationCentersPage() {
   const [form, setForm] = useState<ExaminationCenterInput>(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState("");
+
+  const [exporting, setExporting] = useState(false);
 
   const load = useCallback(async () => {
     if (!accessToken) return;
@@ -190,6 +194,86 @@ export function ExaminationCentersPage() {
     setSearch(searchInput.trim());
   };
 
+  async function handleExportExcel() {
+    if (!accessToken || exporting) return;
+
+    setExporting(true);
+    setError("");
+    setSuccess("");
+
+    try {
+      const count = await exportPagedExcel<ExaminationCenter>({
+        filename: "Danh_sach_trung_tam_sat_hach.xlsx",
+        sheetName: "Trung tam sat hach",
+        columns: [
+          {
+            header: "Mã TTSH",
+            key: "code",
+            width: 18,
+            value: (row) => row.code,
+          },
+          {
+            header: "Tên trung tâm sát hạch",
+            key: "name",
+            width: 48,
+            value: (row) => row.name,
+          },
+          {
+            header: "Địa chỉ",
+            key: "address",
+            width: 50,
+            value: (row) => row.address,
+          },
+          {
+            header: "Điện thoại",
+            key: "phone",
+            width: 20,
+            value: (row) => row.phone,
+          },
+          {
+            header: "Ghi chú",
+            key: "note",
+            width: 40,
+            value: (row) => row.note,
+          },
+          {
+            header: "Trạng thái",
+            key: "isActive",
+            width: 20,
+            value: (row) =>
+              row.isActive ? "Đang hoạt động" : "Ngừng hoạt động",
+          },
+          {
+            header: "Nguồn tên",
+            key: "nameSource",
+            width: 20,
+            value: (row) =>
+              row.nameSource === "xml" ? "Dữ liệu XML" : "Nhập thủ công",
+          },
+        ],
+        fetchPage: (nextPage, limit) =>
+          getExaminationCenters(accessToken, {
+            page: nextPage,
+            limit,
+            search,
+            isActive: status === "all" ? null : status === "true",
+          }),
+      });
+
+      setSuccess(
+        `Đã xuất ${count.toLocaleString("vi-VN")} trung tâm sát hạch.`
+      );
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Không thể xuất Excel trung tâm sát hạch."
+      );
+    } finally {
+      setExporting(false);
+    }
+  }
+
   if (authLoading) {
     return (
       <Box sx={{ display: "flex", justifyContent: "center", p: 6 }}>
@@ -288,6 +372,16 @@ export function ExaminationCentersPage() {
                 </IconButton>
               </span>
             </Tooltip>
+
+            <Button
+              variant="outlined"
+              color="success"
+              startIcon={<FileDownloadOutlined />}
+              disabled={exporting || loading}
+              onClick={() => void handleExportExcel()}
+            >
+              {exporting ? "Đang xuất..." : "Xuất Excel"}
+            </Button>
           </Stack>
         </CardContent>
       </Card>
