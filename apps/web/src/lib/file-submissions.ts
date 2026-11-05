@@ -25,19 +25,29 @@ export interface FileSubmission {
   id: number;
   fileType: SubmissionFileType;
   status: SubmissionStatus;
+
   uploadedByUserId: number;
   uploaderName: string;
+
   trainingSchoolId: number | null;
   trainingSchoolName: string | null;
+
   examinationCenterId: number | null;
   examinationCenterName: string | null;
+
+  examinationSessionId: number | null;
+  examinationSessionCode: string | null;
+
   note: string | null;
   rejectionReason: string | null;
+
   currentVersion: number;
   importStatus: ImportStatus;
   documentMetadata: DocumentMetadata;
+
   originalName: string;
   sizeBytes: string;
+
   createdAt: string;
   updatedAt: string;
   reviewedAt: string | null;
@@ -66,7 +76,11 @@ export interface FileSubmissionReviewResult {
 export interface ExamSessionOption {
   id: number;
   code: string;
-  examDate: string;
+  examDate: string | null;
+  examinationCenterId?: number;
+  centerCode?: string;
+  centerName?: string | null;
+  officialCode?: string | null;
 }
 
 export interface ItOfficerOption {
@@ -75,10 +89,18 @@ export interface ItOfficerOption {
   fullName: string;
 }
 
-/**
- * Chuỗi hiển thị/lưu metadata:
- * Nguyễn Văn A (@it01)
- */
+export interface FileSubmissionVersion {
+  id: number;
+  submissionId: number;
+  version: number;
+  originalName: string;
+  mimeType: string;
+  sizeBytes: string;
+  sha256: string;
+  documentMetadata: DocumentMetadata;
+  createdAt: string;
+}
+
 export function formatItOfficer(officer: ItOfficerOption): string {
   return `${officer.fullName} (@${officer.username})`;
 }
@@ -126,6 +148,13 @@ export function getFileSubmissionOptions(token: string) {
   );
 }
 
+/**
+ * Danh sách kỳ sát hạch người dùng
+ * được phép chọn khi gửi hồ sơ.
+ *
+ * Backend chịu trách nhiệm giới hạn
+ * quyền theo tài khoản và tổ chức.
+ */
 export function listExamSessionOptions(token: string) {
   return apiRequest<ExamSessionOption[]>(
     "/file-submissions/exam-sessions",
@@ -134,10 +163,6 @@ export function listExamSessionOptions(token: string) {
   );
 }
 
-/**
- * Dùng tài khoản IT hiện có.
- * Không tạo role mới.
- */
 export function listItOfficerOptions(token: string) {
   return apiRequest<ItOfficerOption[]>(
     "/file-submissions/it-officers",
@@ -161,6 +186,15 @@ export function getFileImportStates(
   );
 }
 
+/**
+ * Gửi hồ sơ mới.
+ *
+ * BC1:
+ *   examinationSessionId không bắt buộc.
+ *
+ * BC2 / BC2_RESULT / EXAM_48 / EXAM_RESULT:
+ *   bắt buộc gắn với kỳ sát hạch đã tạo.
+ */
 export function uploadFileSubmission(
   token: string,
   input: {
@@ -168,6 +202,7 @@ export function uploadFileSubmission(
     fileType: SubmissionFileType;
     trainingSchoolId?: number | null;
     examinationCenterId?: number | null;
+    examinationSessionId?: number | null;
     note?: string;
     documentMetadata?: DocumentMetadata;
   }
@@ -187,6 +222,10 @@ export function uploadFileSubmission(
     body.set("examinationCenterId", String(input.examinationCenterId));
   }
 
+  if (input.examinationSessionId) {
+    body.set("examinationSessionId", String(input.examinationSessionId));
+  }
+
   return apiRequest<FileSubmission>(
     "/file-submissions",
     { method: "POST", body },
@@ -194,6 +233,10 @@ export function uploadFileSubmission(
   );
 }
 
+/**
+ * Khi thay phiên bản, giữ nguyên kỳ
+ * đã gắn với hồ sơ ban đầu.
+ */
 export function replaceFileSubmission(
   token: string,
   id: number,
@@ -226,18 +269,6 @@ export function reviewFileSubmission(
     },
     token
   );
-}
-
-export interface FileSubmissionVersion {
-  id: number;
-  submissionId: number;
-  version: number;
-  originalName: string;
-  mimeType: string;
-  sizeBytes: string;
-  sha256: string;
-  documentMetadata: DocumentMetadata;
-  createdAt: string;
 }
 
 export function listFileSubmissionVersions(token: string, id: number) {
@@ -297,5 +328,7 @@ export async function downloadFileSubmission(
   anchor.click();
   anchor.remove();
 
-  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 30000);
+  window.setTimeout(() => {
+    URL.revokeObjectURL(objectUrl);
+  }, 30000);
 }

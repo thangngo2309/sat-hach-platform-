@@ -76,9 +76,9 @@ const uploadOptions = {
   limits: {
     fileSize: getFileUploadMaxBytes(),
     files: 1,
-    fields: 6,
+    fields: 7,
     fieldSize: 16 * 1024,
-    parts: 7,
+    parts: 8,
   },
 };
 
@@ -111,25 +111,35 @@ export class FileSubmissionsController {
    * Sử dụng tài khoản SYSTEM_ADMIN hiện có.
    * Không cấp thêm quyền cho các tài khoản này.
    */
+
   @Get('it-officers')
   @Roles(UserRole.EXAM_CENTER, UserRole.SUPER_ADMIN)
   async itOfficers(): Promise<ItOfficerOption[]> {
     return this.db.query(
       `
-        SELECT
-          id,
-          username,
-          full_name AS "fullName"
-        FROM users
-        WHERE role = $1
-        ORDER BY full_name ASC, username ASC, id ASC
-      `,
-      [UserRole.SYSTEM_ADMIN],
+      SELECT
+        id,
+        username,
+        full_name AS "fullName"
+      FROM users
+      WHERE role = $1
+        AND status = 'active'
+      ORDER BY
+        full_name ASC,
+        username ASC,
+        id ASC
+    `,
+      [UserRole.PC08_STAFF],
     );
   }
 
   @Get('exam-sessions')
-  @Roles(UserRole.EXAM_CENTER)
+  @Roles(
+    UserRole.SUPER_ADMIN,
+    UserRole.TRAINING_SCHOOL,
+    UserRole.PC08_STAFF,
+    UserRole.EXAM_CENTER,
+  )
   examSessions(@CurrentUser() user: AuthUser) {
     return this.service.examSessionOptions(user);
   }
@@ -155,6 +165,7 @@ export class FileSubmissionsController {
       examinationCenterId?: string;
       note?: string;
       documentMetadata?: string;
+      examinationSessionId?: string;
     },
     @UploadedFile() file?: Express.Multer.File,
   ) {

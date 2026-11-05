@@ -16,7 +16,7 @@ import type { AuthUser } from '../../shared/types/auth-user.type.js';
 
 type ReceivedFileRow = {
   id: number;
-  fileType: 'bc2_result' | 'exam_48';
+  fileType: 'bc2_result' | 'exam_48' | 'exam_result';
   status: string;
   importStatus: string;
   originalName: string;
@@ -31,6 +31,8 @@ type ReceivedFileRow = {
   examinationCenterId: number | null;
   examinationCenterCode: string | null;
   examinationCenterName: string | null;
+  examinationSessionId: number | null;
+  examinationSessionCode: string | null;
   note: string | null;
   createdAt: Date;
   reviewedAt: Date | null;
@@ -48,7 +50,11 @@ const STORAGE_ROOT = resolve(
 );
 
 function isAllowedReceiver(role: UserRole): boolean {
-  return role === UserRole.TRAINING_SCHOOL || role === UserRole.EXAM_CENTER;
+  return (
+    role === UserRole.TRAINING_SCHOOL ||
+    role === UserRole.EXAM_CENTER ||
+    role === UserRole.PC08_STAFF
+  );
 }
 
 async function calculateSha256(filePath: string): Promise<string> {
@@ -77,85 +83,137 @@ export class ReceivedFilesService {
   }
 
   /**
-   * Trả danh sách file đã duyệt thuộc đúng
-   * đơn vị liên kết với tài khoản đăng nhập.
+   * Điều kiện phân quyền dùng chung cho list/download.
    *
-   * Không nhận schoolId hoặc centerId từ client.
+   * TRAINING_SCHOOL:
+   *   Nhận BC2_RESULT thuộc CSĐT của mình.
+   *
+   * EXAM_CENTER:
+   *   Nhận EXAM_48 thuộc TTSH của mình.
+   *
+   * PC08_STAFF:
+   *   Nhận EXAM_RESULT được phân công
+   *   trong document_metadata của phiên bản hiện tại.
+   *
+   * SYSTEM_ADMIN:
+   *   Không được truy cập.
+   *
+   * $1 = user.sub trong JWT
+   * $2 = user.role trong JWT
+   */
+  private readonly accessCondition = `
+    s.status = 'approved'
+
+    AND (
+      (
+        $2::text = 'training_school'
+        AND s.file_type = 'bc2_result'
+        AND EXISTS (
+          SELECT 1
+          FROM user_organization_assignments a
+          WHERE a.user_id = $1
+            AND a.training_school_id IS NOT NULL
+            AND a.training_school_id = s.training_school_id
+        )
+      )
+
+      OR (
+        $2::text = 'exam_center'
+        AND s.file_type = 'exam_48'
+        AND EXISTS (
+          SELECT 1
+          FROM user_organization_assignments a
+          WHERE a.user_id = $1
+            AND a.examination_center_id IS NOT NULL
+            AND a.examination_center_id = s.examination_center_id
+        )
+      )
+
+      OR (
+        $2::text = 'pc08_staff'
+        AND s.file_type = 'exam_result'
+        AND v.document_metadata->>'itOfficerUserId'
+            = $1::text
+      )
+    )
+  `;
+
+  private readonly baseQuery = `
+    SELECT
+      s.id,
+      s.file_type AS "fileType",
+      s.status,
+      s.import_status AS "importStatus",
+      s.current_version AS "currentVersion",
+      s.uploaded_by_user_id AS "uploadedByUserId",
+
+      u.full_name AS "uploaderName",
+
+      s.training_school_id AS "trainingSchoolId",
+      ts.code AS "trainingSchoolCode",
+      ts.name AS "trainingSchoolName",
+
+      s.examination_center_id AS "examinationCenterId",
+      ec.code AS "examinationCenterCode",
+      ec.name AS "examinationCenterName",
+
+      s.examination_session_id AS "examinationSessionId",
+      es.code AS "examinationSessionCode",
+
+      s.note,
+      s.created_at AS "createdAt",
+      s.reviewed_at AS "reviewedAt",
+
+      v.original_name AS "originalName",
+      v.size_bytes::text AS "sizeBytes",
+      v.sha256
+
+    FROM file_submissions s
+
+    JOIN users u
+      ON u.id = s.uploaded_by_user_id
+
+    JOIN file_submission_versions v
+      ON v.submission_id = s.id
+     AND v.version = s.current_version
+
+    LEFT JOIN training_schools ts
+      ON ts.id = s.training_school_id
+
+    LEFT JOIN examination_centers ec
+      ON ec.id = s.examination_center_id
+
+    LEFT JOIN examination_sessions es
+      ON es.id = s.examination_session_id
+  `;
+
+  /**
+   * Lấy file mà tài khoản được phép nhận.
+   *
+   * Không nhận userId từ Frontend.
    */
   async list(user: AuthUser): Promise<ReceivedFileRow[]> {
     this.assertRole(user);
 
     return this.db.query(
       `
-          SELECT
-            s.id,
-            s.file_type AS "fileType",
-            s.status,
-            s.import_status AS "importStatus",
-            s.current_version AS "currentVersion",
-            s.uploaded_by_user_id AS "uploadedByUserId",
-            u.full_name AS "uploaderName",
-            s.training_school_id AS "trainingSchoolId",
-            ts.code AS "trainingSchoolCode",
-            ts.name AS "trainingSchoolName",
-            s.examination_center_id AS "examinationCenterId",
-            ec.code AS "examinationCenterCode",
-            ec.name AS "examinationCenterName",
-            s.note,
-            s.created_at AS "createdAt",
-            s.reviewed_at AS "reviewedAt",
-            v.original_name AS "originalName",
-            v.size_bytes::text AS "sizeBytes",
-            v.sha256
-  
-          FROM file_submissions s
-  
-          JOIN users u
-            ON u.id = s.uploaded_by_user_id
-  
-          JOIN file_submission_versions v
-            ON v.submission_id = s.id
-           AND v.version = s.current_version
-  
-          LEFT JOIN training_schools ts
-            ON ts.id = s.training_school_id
-  
-          LEFT JOIN examination_centers ec
-            ON ec.id = s.examination_center_id
-  
-          JOIN user_organization_assignments a
-            ON a.user_id = $1
-  
-          WHERE s.status = 'approved'
-            AND (
-              (
-                $2::text = 'training_school'
-                AND s.file_type = 'bc2_result'
-                AND s.training_school_id = a.training_school_id
-                AND a.training_school_id IS NOT NULL
-              )
-              OR
-              (
-                $2::text = 'exam_center'
-                AND s.file_type = 'exam_48'
-                AND s.examination_center_id = a.examination_center_id
-                AND a.examination_center_id IS NOT NULL
-              )
-            )
-  
-          ORDER BY
-            s.reviewed_at DESC NULLS LAST,
-            s.id DESC
-  
-          LIMIT 500
-        `,
+        ${this.baseQuery}
+
+        WHERE ${this.accessCondition}
+
+        ORDER BY
+          s.reviewed_at DESC NULLS LAST,
+          s.id DESC
+
+        LIMIT 500
+      `,
       [user.sub, user.role],
     );
   }
 
   /**
-   * Kiểm tra quyền lại ngay tại endpoint download.
-   * Không được chỉ tin dữ liệu đã trả từ list().
+   * Kiểm tra lại quyền theo đúng bản ghi
+   * và phiên bản hiện tại khi download.
    */
   private async findAccessible(
     user: AuthUser,
@@ -165,76 +223,33 @@ export class ReceivedFilesService {
 
     const rows: ReceivedFileRow[] = await this.db.query(
       `
-          SELECT
-            s.id,
-            s.file_type AS "fileType",
-            s.status,
-            s.import_status AS "importStatus",
-            s.current_version AS "currentVersion",
-            s.uploaded_by_user_id AS "uploadedByUserId",
-            u.full_name AS "uploaderName",
-            s.training_school_id AS "trainingSchoolId",
-            ts.code AS "trainingSchoolCode",
-            ts.name AS "trainingSchoolName",
-            s.examination_center_id AS "examinationCenterId",
-            ec.code AS "examinationCenterCode",
-            ec.name AS "examinationCenterName",
-            s.note,
-            s.created_at AS "createdAt",
-            s.reviewed_at AS "reviewedAt",
-            v.original_name AS "originalName",
-            v.size_bytes::text AS "sizeBytes",
-            v.sha256
-  
-          FROM file_submissions s
-  
-          JOIN users u
-            ON u.id = s.uploaded_by_user_id
-  
-          JOIN file_submission_versions v
-            ON v.submission_id = s.id
-           AND v.version = s.current_version
-  
-          LEFT JOIN training_schools ts
-            ON ts.id = s.training_school_id
-  
-          LEFT JOIN examination_centers ec
-            ON ec.id = s.examination_center_id
-  
-          JOIN user_organization_assignments a
-            ON a.user_id = $2
-  
-          WHERE s.id = $1
-            AND s.status = 'approved'
-            AND (
-              (
-                $3::text = 'training_school'
-                AND s.file_type = 'bc2_result'
-                AND a.training_school_id IS NOT NULL
-                AND s.training_school_id = a.training_school_id
-              )
-              OR
-              (
-                $3::text = 'exam_center'
-                AND s.file_type = 'exam_48'
-                AND a.examination_center_id IS NOT NULL
-                AND s.examination_center_id = a.examination_center_id
-              )
-            )
-  
+          ${this.baseQuery}
+
+          WHERE s.id = $3
+            AND ${this.accessCondition}
+
           LIMIT 1
         `,
-      [id, user.sub, user.role],
+      [user.sub, user.role, id],
     );
 
     if (!rows.length) {
-      // Không tiết lộ file ID thuộc đơn vị nào.
       throw new NotFoundException('Không tìm thấy file được phép tải.');
     }
 
     return rows[0];
   }
 
+  /**
+   * Download file đã được duyệt.
+   *
+   * Luôn kiểm tra:
+   * - Quyền người nhận
+   * - Phiên bản hiện tại
+   * - File lưu trên server
+   * - Dung lượng
+   * - SHA-256
+   */
   async download(
     user: AuthUser,
     id: number,
@@ -249,21 +264,21 @@ export class ReceivedFilesService {
 
     const accessible = await this.findAccessible(user, id);
 
-    // Chỉ cho tải phiên bản đã được duyệt.
-    // Không cho đơn vị nhận tải các phiên bản cũ
-    // hoặc bản nháp chưa duyệt.
     const versions: StoredFileRow[] = await this.db.query(
       `
-            SELECT
-              storage_key AS "storageKey",
-              original_name AS "originalName",
-              sha256,
-              size_bytes::text AS "sizeBytes"
-            FROM file_submission_versions
-            WHERE submission_id = $1
-              AND version = $2
-            LIMIT 1
-          `,
+          SELECT
+            storage_key AS "storageKey",
+            original_name AS "originalName",
+            sha256,
+            size_bytes::text AS "sizeBytes"
+
+          FROM file_submission_versions
+
+          WHERE submission_id = $1
+            AND version = $2
+
+          LIMIT 1
+        `,
       [id, accessible.currentVersion],
     );
 
@@ -325,14 +340,19 @@ export class ReceivedFilesService {
 
     await this.db.query(
       `
-          INSERT INTO file_submission_events (
-            submission_id,
-            actor_user_id,
-            action,
-            detail
-          )
-          VALUES ($1, $2, 'downloaded', $3::jsonb)
-        `,
+        INSERT INTO file_submission_events (
+          submission_id,
+          actor_user_id,
+          action,
+          detail
+        )
+        VALUES (
+          $1,
+          $2,
+          'downloaded',
+          $3::jsonb
+        )
+      `,
       [
         id,
         user.sub,
@@ -340,6 +360,7 @@ export class ReceivedFilesService {
           version: accessible.currentVersion,
           receiverRole: user.role,
           receivedFile: true,
+          examinationSessionId: accessible.examinationSessionId,
         }),
       ],
     );

@@ -61,28 +61,38 @@ export function ReceivedFilesPanel() {
   const [search, setSearch] = useState("");
   const [reload, setReload] = useState(0);
 
+  const role = user?.role;
+
   const authorized =
-    user?.role === "training_school" || user?.role === "exam_center";
+    role === "training_school" ||
+    role === "exam_center" ||
+    role === "pc08_staff";
 
   const title =
-    user?.role === "training_school"
+    role === "training_school"
       ? "Kết quả BC2 nhận từ PC08"
+      : role === "pc08_staff"
+      ? "Kết quả sát hạch được phân công"
       : "File dự sát hạch 48_ nhận từ PC08";
 
   const description =
-    user?.role === "training_school"
-      ? "Các file kết quả BC2 đã được SUPER_ADMIN duyệt và gửi đến cơ sở đào tạo của bạn."
-      : "Các file dự sát hạch đã được SUPER_ADMIN duyệt và gửi đến trung tâm sát hạch của bạn.";
+    role === "training_school"
+      ? "Các file kết quả BC2 đã được duyệt và gửi đến cơ sở đào tạo."
+      : role === "pc08_staff"
+      ? "Danh sách file KQSH đã được duyệt và phân công trực tiếp cho tài khoản PC08 của bạn."
+      : "Các file dự sát hạch đã được duyệt và gửi đến trung tâm sát hạch.";
 
   const load = useCallback(async () => {
-    if (!accessToken || !authorized) return;
+    if (!accessToken || !authorized) {
+      setRows([]);
+      return;
+    }
 
     setLoading(true);
     setError("");
 
     try {
       const data = await listReceivedFiles(accessToken);
-
       setRows(data);
     } catch (err) {
       setError(
@@ -104,8 +114,8 @@ export function ReceivedFilesPanel() {
 
     if (!keyword) return rows;
 
-    return rows.filter((item) => {
-      return [
+    return rows.filter((item) =>
+      [
         item.originalName,
         item.uploaderName,
         item.trainingSchoolName,
@@ -114,8 +124,8 @@ export function ReceivedFilesPanel() {
         String(item.id),
       ]
         .filter(Boolean)
-        .some((value) => String(value).toLowerCase().includes(keyword));
-    });
+        .some((value) => String(value).toLowerCase().includes(keyword))
+    );
   }, [rows, search]);
 
   async function download(item: ReceivedFile) {
@@ -146,12 +156,9 @@ export function ReceivedFilesPanel() {
       >
         <Box sx={{ p: { xs: 2, md: 3 } }}>
           <Stack
-            direction={{
-              xs: "column",
-              sm: "row",
-            }}
+            direction={{ xs: "column", sm: "row" }}
+            spacing={2}
             sx={{
-              spacing: 2,
               alignItems: {
                 xs: "stretch",
                 sm: "center",
@@ -159,7 +166,7 @@ export function ReceivedFilesPanel() {
               justifyContent: "space-between",
             }}
           >
-            <Stack direction="row" sx={{ spacing: 1.5, alignItems: "center" }}>
+            <Stack direction="row" spacing={1.5} sx={{ alignItems: "center" }}>
               <FileDownloadOutlined color="primary" sx={{ fontSize: 30 }} />
 
               <Box>
@@ -186,10 +193,7 @@ export function ReceivedFilesPanel() {
           </Stack>
 
           <Stack
-            direction={{
-              xs: "column",
-              sm: "row",
-            }}
+            direction={{ xs: "column", sm: "row" }}
             spacing={1.5}
             sx={{ mt: 2.5 }}
           >
@@ -221,11 +225,12 @@ export function ReceivedFilesPanel() {
         )}
 
         <TableContainer>
-          <Table size="small" sx={{ minWidth: 820 }}>
+          <Table size="small" sx={{ minWidth: 850 }}>
             <TableHead>
               <TableRow>
                 <TableCell>File</TableCell>
                 <TableCell>Người gửi</TableCell>
+                <TableCell>Trung tâm sát hạch</TableCell>
                 <TableCell>Ngày duyệt</TableCell>
                 <TableCell>Dung lượng</TableCell>
                 <TableCell>Trạng thái</TableCell>
@@ -268,6 +273,8 @@ export function ReceivedFilesPanel() {
 
                   <TableCell>{item.uploaderName}</TableCell>
 
+                  <TableCell>{item.examinationCenterName ?? "—"}</TableCell>
+
                   <TableCell>{formatDate(item.reviewedAt)}</TableCell>
 
                   <TableCell>{formatSize(item.sizeBytes)}</TableCell>
@@ -298,11 +305,13 @@ export function ReceivedFilesPanel() {
 
               {!loading && filteredRows.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={6} align="center" sx={{ py: 6 }}>
+                  <TableCell colSpan={7} align="center" sx={{ py: 6 }}>
                     <Typography color="text.secondary">
                       {search
                         ? "Không tìm thấy file phù hợp."
-                        : "Chưa có file được PC08 gửi và phê duyệt."}
+                        : role === "pc08_staff"
+                        ? "Chưa có file KQSH đã duyệt được phân công cho bạn."
+                        : "Chưa có file được gửi và phê duyệt."}
                     </Typography>
                   </TableCell>
                 </TableRow>
@@ -310,7 +319,7 @@ export function ReceivedFilesPanel() {
 
               {loading && (
                 <TableRow>
-                  <TableCell colSpan={6} align="center" sx={{ py: 4 }}>
+                  <TableCell colSpan={7} align="center" sx={{ py: 4 }}>
                     <CircularProgress size={25} />
                   </TableCell>
                 </TableRow>

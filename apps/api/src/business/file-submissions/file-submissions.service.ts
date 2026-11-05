@@ -37,6 +37,7 @@ type UploadInput = {
   examinationCenterId?: string;
   note?: string;
   documentMetadata?: string;
+  examinationSessionId?: string;
 };
 
 type SubmissionRow = {
@@ -59,6 +60,8 @@ type SubmissionRow = {
   createdAt: Date;
   updatedAt: Date;
   reviewedAt: Date | null;
+  examinationSessionId: number | null;
+  examinationSessionCode: string | null;
 };
 
 type VersionRow = {
@@ -294,6 +297,69 @@ export class FileSubmissionsService {
     private readonly db: DataSource,
   ) {}
 
+  private async validateExaminationSession(
+    type: FileType,
+    sessionIdRaw: string | undefined,
+    schoolId: number | null,
+    centerId: number | null,
+    user: AuthUser,
+  ): Promise<number | null> {
+    if (type === 'bc1') {
+      return null;
+    }
+
+    const sessionId = parsePositiveId(sessionIdRaw, 'Kỳ sát hạch');
+
+    const rows: Array<{
+      id: number;
+      examinationCenterId: number;
+      examDate: string | null;
+    }> = await this.db.query(
+      `
+      SELECT
+        id,
+        examination_center_id AS "examinationCenterId",
+        exam_date::text AS "examDate"
+      FROM examination_sessions
+      WHERE id = $1
+      LIMIT 1
+    `,
+      [sessionId],
+    );
+
+    if (!rows.length) {
+      throw new BadRequestException(
+        'Kỳ sát hạch không tồn tại. Vui lòng tạo kỳ trước.',
+      );
+    }
+
+    const session = rows[0];
+
+    /**
+     * File do TTSH gửi phải thuộc đúng TTSH đó.
+     * File 48_ do PC08 gửi phải khớp TTSH đã chọn.
+     */
+    if (centerId !== null && Number(session.examinationCenterId) !== centerId) {
+      throw new BadRequestException(
+        'Trung tâm sát hạch không khớp kỳ đã chọn.',
+      );
+    }
+
+    /**
+     * CSĐT có thể gửi BC2 cho cùng một kỳ
+     * với nhiều CSĐT khác.
+     *
+     * Không giới hạn một kỳ chỉ có một schoolId.
+     * schoolId sẽ tiếp tục được lưu độc lập
+     * trong file_submissions.
+     */
+    if (user.role === UserRole.TRAINING_SCHOOL && schoolId === null) {
+      throw new BadRequestException('Tài khoản chưa được gắn cơ sở đào tạo.');
+    }
+
+    return sessionId;
+  }
+
   private ensureUploader(user: AuthUser, type: FileType) {
     if (!ALLOWED_ROLES[user.role]?.includes(type)) {
       throw new ForbiddenException(
@@ -352,24 +418,60 @@ export class FileSubmissionsService {
   }
 
   async examSessionOptions(user: AuthUser) {
-    if (user.role !== UserRole.EXAM_CENTER) {
+    if (
+      user.role !== UserRole.TRAINING_SCHOOL &&
+      user.role !== UserRole.PC08_STAFF &&
+      user.role !== UserRole.EXAM_CENTER &&
+      user.role !== UserRole.SUPER_ADMIN
+    ) {
       throw new ForbiddenException(
-        'Chỉ tài khoản TTSH được lấy danh sách kỳ sát hạch.',
+        'Không được truy cập danh sách kỳ sát hạch.',
       );
     }
+
     const assignment = await this.getAssignment(user.sub);
-    if (!assignment.examinationCenterId) {
+
+    if (user.role === UserRole.EXAM_CENTER && !assignment.examinationCenterId) {
       throw new ForbiddenException('Tài khoản chưa được gắn TTSH.');
     }
+
+    /**
+     * TTSH chỉ thấy kỳ thuộc trung tâm mình.
+     *
+     * CSĐT và PC08 có thể tra cứu kỳ
+     * để gửi BC2, BC2_RESULT, EXAM_48.
+     *
+     * Khi upload Backend vẫn phải kiểm tra
+     * quyền và quan hệ kỳ - TTSH - CSĐT.
+     */
     return this.db.query(
       `
-      SELECT id, code, exam_date::text AS "examDate"
-      FROM examination_sessions
-      WHERE examination_center_id = $1
-      ORDER BY exam_date DESC, id DESC
+      SELECT
+        es.id,
+        es.code,
+        es.official_code AS "officialCode",
+        es.exam_date::text AS "examDate",
+        es.examination_center_id AS "examinationCenterId",
+        ec.code AS "centerCode",
+        ec.name AS "centerName"
+
+      FROM examination_sessions es
+
+      JOIN examination_centers ec
+        ON ec.id = es.examination_center_id
+
+      WHERE (
+        $1::boolean = FALSE
+        OR es.examination_center_id = $2::int
+      )
+
+      ORDER BY
+        es.exam_date DESC NULLS LAST,
+        es.id DESC
+
       LIMIT 500
     `,
-      [assignment.examinationCenterId],
+      [user.role === UserRole.EXAM_CENTER, assignment.examinationCenterId],
     );
   }
 
@@ -547,7 +649,9 @@ export class FileSubmissionsService {
       COALESCE(v.document_metadata, '{}'::jsonb) AS "documentMetadata",
       s.created_at AS "createdAt",
       s.updated_at AS "updatedAt",
-      s.reviewed_at AS "reviewedAt"
+      s.reviewed_at AS "reviewedAt",
+      s.examination_session_id AS "examinationSessionId",
+      es.code AS "examinationSessionCode"
 
     FROM file_submissions s
 
@@ -559,6 +663,9 @@ export class FileSubmissionsService {
 
     LEFT JOIN examination_centers ec
       ON ec.id = s.examination_center_id
+    
+    LEFT JOIN examination_sessions es
+      ON es.id = s.examination_session_id
 
     JOIN file_submission_versions v
       ON v.submission_id = s.id
@@ -626,6 +733,67 @@ export class FileSubmissionsService {
     );
   }
 
+  /**
+   * Xác thực người phụ trách KQSH.
+   *
+   * Frontend hiện gửi:
+   * "Nguyễn Văn A (@it01)"
+   *
+   * Backend xác minh:
+   * - Username tồn tại
+   * - Role là PC08_STAFF
+   * - Tài khoản đang active
+   *
+   * Chỉ lưu user ID đã được xác minh.
+   */
+  private async resolveItPc08(metadata: DocumentMetadata): Promise<number> {
+    const display = String(metadata.itOfficer ?? '').trim();
+
+    const match = /^(.+)\s+\(@([^()]+)\)$/.exec(display);
+
+    if (!match) {
+      throw new BadRequestException(
+        'Vui lòng chọn IT PC08 phụ trách từ danh sách.',
+      );
+    }
+
+    const fullName = match[1].trim();
+    const username = match[2].trim();
+
+    const rows: Array<{
+      id: number;
+      fullName: string;
+    }> = await this.db.query(
+      `
+      SELECT
+        id,
+        full_name AS "fullName"
+      FROM users
+      WHERE username = $1
+        AND role = $2
+        AND status = 'active'
+      LIMIT 1
+    `,
+      [username, UserRole.PC08_STAFF],
+    );
+
+    if (!rows.length) {
+      throw new BadRequestException(
+        'IT phụ trách không tồn tại, ' +
+          'không thuộc PC08 hoặc đã ngừng hoạt động.',
+      );
+    }
+
+    if (rows[0].fullName !== fullName) {
+      throw new BadRequestException(
+        'Thông tin IT phụ trách đã thay đổi. ' +
+          'Vui lòng chọn lại từ danh sách.',
+      );
+    }
+
+    return Number(rows[0].id);
+  }
+
   async create(
     user: AuthUser,
     input: UploadInput,
@@ -645,8 +813,25 @@ export class FileSubmissionsService {
       }
 
       const scope = await this.validateScope(user, type, input);
+
+      const examinationSessionId = await this.validateExaminationSession(
+        type,
+        input.examinationSessionId,
+        scope.schoolId,
+        scope.centerId,
+        user,
+      );
+
       const metadata = parseDocumentMetadata(type, input.documentMetadata);
       await this.validateMetadataSession(type, metadata, scope.centerId);
+
+      const storedMetadata =
+        type === 'exam_result'
+          ? {
+              ...metadata,
+              itOfficerUserId: await this.resolveItPc08(metadata),
+            }
+          : metadata;
 
       const note = input.note?.trim().slice(0, 2000) || null;
 
@@ -660,12 +845,20 @@ export class FileSubmissionsService {
               uploaded_by_user_id,
               training_school_id,
               examination_center_id,
+              examination_session_id,
               note
             )
-            VALUES ($1, $2, $3, $4, $5)
+            VALUES ($1, $2, $3, $4, $5, $6)
             RETURNING id
           `,
-          [type, user.sub, scope.schoolId, scope.centerId, note],
+          [
+            type,
+            user.sub,
+            scope.schoolId,
+            scope.centerId,
+            examinationSessionId,
+            note,
+          ],
         );
 
         const submissionId = created[0].id;
@@ -695,14 +888,14 @@ export class FileSubmissionsService {
             stored!.sizeBytes,
             stored!.sha256,
             user.sub,
-            JSON.stringify(metadata),
+            JSON.stringify(storedMetadata),
           ],
         );
 
         await this.addEvent(manager, submissionId, user.sub, 'created', {
           fileType: type,
           filename: stored!.originalName,
-          documentMetadata: metadata,
+          documentMetadata: storedMetadata,
         });
 
         return submissionId;
@@ -752,6 +945,14 @@ export class FileSubmissionsService {
         metadata,
         submission.examinationCenterId,
       );
+
+      const storedMetadata =
+        submission.fileType === 'exam_result'
+          ? {
+              ...metadata,
+              itOfficerUserId: await this.resolveItPc08(metadata),
+            }
+          : metadata;
 
       stored = await this.prepareStoredFile(uploadedFile);
 
@@ -811,7 +1012,7 @@ export class FileSubmissionsService {
             stored!.sizeBytes,
             stored!.sha256,
             user.sub,
-            JSON.stringify(metadata),
+            JSON.stringify(storedMetadata),
           ],
         );
 
@@ -833,7 +1034,7 @@ export class FileSubmissionsService {
         await this.addEvent(manager, id, user.sub, 'version_uploaded', {
           version: nextVersion,
           filename: stored!.originalName,
-          documentMetadata: metadata,
+          documentMetadata: storedMetadata,
         });
       });
 

@@ -324,7 +324,11 @@ export class ExamListImportService {
     return { id: Number(rows[0].id), created: true };
   }
 
-  async confirm(file: Express.Multer.File | undefined, userId: number) {
+  async confirm(
+    file: Express.Multer.File | undefined,
+    userId: number,
+    examinationSessionId: number,
+  ) {
     const { document, sha256 } = this.read(file);
     const photos = extractStudentPhotoMap(file!.buffer, 'SAT_HACH');
 
@@ -359,48 +363,151 @@ export class ExamListImportService {
       }
 
       const batchId = Number(batchRows[0].id);
-      const centerId = await this.ensureCenter(
-        manager,
-        document.session.examinationCenterCode,
+
+      if (
+        !Number.isSafeInteger(examinationSessionId) ||
+        examinationSessionId <= 0
+      ) {
+        throw new BadRequestException(
+          'Phải chọn kỳ sát hạch đã tạo trước khi import file 48_.',
+        );
+      }
+
+      /**
+       * Khóa kỳ sát hạch để tránh hai file 48_
+       * đồng thời cập nhật một kỳ.
+       */
+      const sessionRows: Array<{
+        id: number;
+        code: string;
+        tempCode: string | null;
+        officialCode: string | null;
+        centerCode: string;
+        examDate: string | null;
+      }> = await manager.query(
+        `
+    SELECT
+      es.id,
+      es.code,
+      es.temp_code AS "tempCode",
+      es.official_code AS "officialCode",
+      ec.code AS "centerCode",
+      es.exam_date::text AS "examDate"
+
+    FROM examination_sessions es
+
+    JOIN examination_centers ec
+      ON ec.id = es.examination_center_id
+
+    WHERE es.id = $1
+
+    FOR UPDATE OF es
+  `,
+        [examinationSessionId],
       );
 
+      if (!sessionRows.length) {
+        throw new BadRequestException('Kỳ sát hạch đã chọn không tồn tại.');
+      }
+
+      const selectedSession = sessionRows[0];
+
+      const normalize = (value: string | null) =>
+        (value ?? '').trim().toUpperCase();
+
+      /**
+       * Một kỳ chỉ thuộc một TTSH.
+       * Tuyệt đối không thay examination_center_id
+       * bằng dữ liệu lấy từ file XML.
+       */
+      if (
+        normalize(selectedSession.centerCode) !==
+        normalize(document.session.examinationCenterCode)
+      ) {
+        throw new ConflictException(
+          `TTSH của kỳ đã chọn (${selectedSession.centerCode}) ` +
+            `không khớp TTSH trong file 48_ ` +
+            `(${document.session.examinationCenterCode}).`,
+        );
+      }
+
+      if (
+        selectedSession.examDate &&
+        document.session.examDate &&
+        selectedSession.examDate.slice(0, 10) !== document.session.examDate
+      ) {
+        throw new ConflictException(
+          'Ngày sát hạch trong file 48_ không khớp ' +
+            'ngày sát hạch của kỳ đã tạo.',
+        );
+      }
+
+      const xmlOfficialCode = document.session.code.trim();
+
+      /**
+       * Kỳ đã có mã chính thức thì không được
+       * đổi sang mã khác.
+       */
+      if (
+        selectedSession.officialCode &&
+        selectedSession.officialCode !== xmlOfficialCode
+      ) {
+        throw new ConflictException(
+          `Kỳ sát hạch đã có mã chính thức ` +
+            `${selectedSession.officialCode}. ` +
+            `Không thể cập nhật thành ${xmlOfficialCode}.`,
+        );
+      }
+
+      /**
+       * Không cho phép lấy mã chính thức
+       * đã thuộc một kỳ khác.
+       */
+      const occupied: Array<{ id: number }> = await manager.query(
+        `
+      SELECT id
+      FROM examination_sessions
+      WHERE code = $1
+        AND id <> $2
+      LIMIT 1
+    `,
+        [xmlOfficialCode, examinationSessionId],
+      );
+
+      if (occupied.length) {
+        throw new ConflictException(
+          `Mã kỳ sát hạch ${xmlOfficialCode} ` + 'đã thuộc một kỳ khác.',
+        );
+      }
+
+      /**
+       * Cập nhật kỳ từ mã tạm sang mã chính thức.
+       *
+       * ID kỳ giữ nguyên.
+       * TTSH giữ nguyên.
+       * Các file đã gắn không thay đổi.
+       */
       const examRows: IdRow[] = await manager.query(
         `
-          INSERT INTO examination_sessions (
-            code, examination_center_id,
-            exam_date, exam_time,
-            decision_number, decision_date,
-            source_unit_code, source_unit_name,
-            declared_count, last_import_id
-          )
-          VALUES (
-            $1, $2, $3::date, $4,
-            $5, $6::date, $7, $8,
-            $9, $10
-          )
-          ON CONFLICT (code) DO UPDATE SET
-            examination_center_id =
-              EXCLUDED.examination_center_id,
-            exam_date =
-              COALESCE(EXCLUDED.exam_date, examination_sessions.exam_date),
-            exam_time =
-              COALESCE(EXCLUDED.exam_time, examination_sessions.exam_time),
-            decision_number =
-              COALESCE(EXCLUDED.decision_number, examination_sessions.decision_number),
-            decision_date =
-              COALESCE(EXCLUDED.decision_date, examination_sessions.decision_date),
-            source_unit_code =
-              COALESCE(EXCLUDED.source_unit_code, examination_sessions.source_unit_code),
-            source_unit_name =
-              COALESCE(EXCLUDED.source_unit_name, examination_sessions.source_unit_name),
-            declared_count = EXCLUDED.declared_count,
-            last_import_id = EXCLUDED.last_import_id,
+          UPDATE examination_sessions
+          SET
+            code = $2,
+            official_code = $2,
+            exam_date = COALESCE($3::date, exam_date),
+            exam_time = COALESCE($4, exam_time),
+            decision_number = COALESCE($5, decision_number),
+            decision_date = COALESCE($6::date, decision_date),
+            source_unit_code = COALESCE($7, source_unit_code),
+            source_unit_name = COALESCE($8, source_unit_name),
+            declared_count = $9,
+            last_import_id = $10,
             updated_at = NOW()
+          WHERE id = $1
           RETURNING id
-          `,
+        `,
         [
-          document.session.code,
-          centerId,
+          examinationSessionId,
+          xmlOfficialCode,
           document.session.examDate,
           document.session.examTime,
           document.session.decisionNumber,

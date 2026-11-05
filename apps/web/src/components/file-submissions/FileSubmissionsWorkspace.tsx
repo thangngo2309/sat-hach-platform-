@@ -77,14 +77,28 @@ const EMPTY_OPTIONS: OrganizationOptions = {
 
 function formatTime(value: string): string {
   const date = new Date(value);
+
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString("vi-VN");
 }
 
 function formatSize(value: string): string {
   const bytes = Number(value);
+
   return Number.isFinite(bytes)
     ? `${(bytes / 1024 / 1024).toFixed(2)} MB`
     : "—";
+}
+
+function formatSession(session: ExamSessionOption): string {
+  const date = session.examDate?.slice(0, 10) ?? "Chưa có ngày";
+
+  return [session.code, session.centerName || session.centerCode, date]
+    .filter(Boolean)
+    .join(" — ");
+}
+
+function needsSession(type: SubmissionFileType): boolean {
+  return type !== "bc1";
 }
 
 type MetadataFormProps = {
@@ -97,6 +111,11 @@ type MetadataFormProps = {
   disabled?: boolean;
 };
 
+/**
+ * Metadata chỉ hiển thị các trường nghiệp vụ
+ * khác. Kỳ sát hạch được chọn ở form chính,
+ * không cho tạo thêm dropdown kỳ thứ hai.
+ */
 function MetadataForm({
   fileType,
   values,
@@ -106,13 +125,19 @@ function MetadataForm({
   loadingOfficers = false,
   disabled = false,
 }: MetadataFormProps) {
-  const fields = DOCUMENT_FIELDS[fileType];
+  const fields = DOCUMENT_FIELDS[fileType].filter(
+    (field) => field.type !== "session"
+  );
 
   if (!fields.length) return null;
 
   const update = (key: string, value: string) => {
     onChange({ ...values, [key]: value });
   };
+
+  const selectedSession = sessions.find(
+    (item) => String(item.id) === String(values.examinationSessionId ?? "")
+  );
 
   return (
     <Card variant="outlined" sx={{ p: 2, borderRadius: 2 }}>
@@ -133,7 +158,6 @@ function MetadataForm({
         {fields.map((field) => {
           if (fileType === "exam_result" && field.key === "itOfficer") {
             const current = values.itOfficer ?? "";
-
             const availableValues = itOfficers.map(formatItOfficer);
 
             const hasLegacyValue =
@@ -177,42 +201,6 @@ function MetadataForm({
             );
           }
 
-          if (field.type === "session") {
-            return (
-              <TextField
-                key={field.key}
-                select
-                fullWidth
-                required
-                size="small"
-                label={field.label}
-                value={values[field.key] ?? ""}
-                disabled={disabled}
-                onChange={(event) => {
-                  const selected = sessions.find(
-                    (session) => String(session.id) === event.target.value
-                  );
-
-                  onChange({
-                    ...values,
-                    [field.key]: event.target.value,
-                    examinationDate: selected
-                      ? selected.examDate.slice(0, 10)
-                      : "",
-                  });
-                }}
-              >
-                <MenuItem value="">Chọn kỳ sát hạch</MenuItem>
-
-                {sessions.map((session) => (
-                  <MenuItem key={session.id} value={String(session.id)}>
-                    {session.code} — {session.examDate.slice(0, 10)}
-                  </MenuItem>
-                ))}
-              </TextField>
-            );
-          }
-
           if (field.type === "license") {
             return (
               <TextField
@@ -237,6 +225,9 @@ function MetadataForm({
             );
           }
 
+          const isDate = field.type === "date";
+          const isExamDate = field.key === "examinationDate";
+
           return (
             <TextField
               key={field.key}
@@ -244,15 +235,20 @@ function MetadataForm({
               required
               size="small"
               label={field.label}
-              type={field.type === "date" ? "date" : "text"}
+              type={isDate ? "date" : "text"}
               value={values[field.key] ?? ""}
-              disabled={disabled}
+              disabled={disabled || (isExamDate && Boolean(selectedSession))}
               slotProps={
-                field.type === "date"
+                isDate
                   ? { inputLabel: { shrink: true } }
                   : { htmlInput: { maxLength: 255 } }
               }
               onChange={(event) => update(field.key, event.target.value)}
+              helperText={
+                isExamDate && selectedSession
+                  ? "Ngày được lấy từ kỳ sát hạch đã chọn."
+                  : undefined
+              }
             />
           );
         })}
@@ -271,6 +267,8 @@ export function FileSubmissionsWorkspace() {
 
   const [schoolId, setSchoolId] = useState("");
   const [centerId, setCenterId] = useState("");
+  const [selectedSessionId, setSelectedSessionId] = useState("");
+
   const [note, setNote] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [metadata, setMetadata] = useState<DocumentMetadata>({});
@@ -278,6 +276,8 @@ export function FileSubmissionsWorkspace() {
   const [sessions, setSessions] = useState<ExamSessionOption[]>([]);
 
   const [itOfficers, setItOfficers] = useState<ItOfficerOption[]>([]);
+
+  const [loadingSessions, setLoadingSessions] = useState(false);
 
   const [loadingOfficers, setLoadingOfficers] = useState(false);
 
@@ -298,6 +298,7 @@ export function FileSubmissionsWorkspace() {
 
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [reload, setReload] = useState(0);
@@ -307,39 +308,78 @@ export function FileSubmissionsWorkspace() {
     [user?.role]
   );
 
+  const availableSessions = useMemo(() => {
+    if (!centerId) return sessions;
+
+    return sessions.filter(
+      (session) =>
+        !session.examinationCenterId ||
+        Number(session.examinationCenterId) === Number(centerId)
+    );
+  }, [sessions, centerId]);
+
+  const selectedSession = sessions.find(
+    (session) => String(session.id) === selectedSessionId
+  );
+
   useEffect(() => {
     if (allowedTypes.length && !allowedTypes.includes(fileType)) {
       setFileType(allowedTypes[0]);
       setMetadata({});
+      setSelectedSessionId("");
     }
   }, [allowedTypes, fileType]);
 
+  /**
+   * Kỳ sát hạch dùng chung cho CSĐT, PC08, TTSH.
+   * Chỉ tải IT phụ trách đối với TTSH.
+   */
+  const loadSessions = useCallback(async () => {
+    if (!accessToken || !allowedTypes.length) {
+      setSessions([]);
+      return;
+    }
+
+    setLoadingSessions(true);
+
+    try {
+      const data = await listExamSessionOptions(accessToken);
+      setSessions(Array.isArray(data) ? data : []);
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Không thể tải danh sách kỳ sát hạch."
+      );
+    } finally {
+      setLoadingSessions(false);
+    }
+  }, [accessToken, allowedTypes.length]);
+
+  useEffect(() => {
+    void loadSessions();
+  }, [loadSessions]);
+
   useEffect(() => {
     if (!accessToken || user?.role !== "exam_center") {
-      setSessions([]);
       setItOfficers([]);
       return;
     }
 
     let active = true;
+
     setLoadingOfficers(true);
 
-    void Promise.all([
-      listExamSessionOptions(accessToken),
-      listItOfficerOptions(accessToken),
-    ])
-      .then(([sessionData, officerData]) => {
-        if (!active) return;
-        setSessions(sessionData);
-        setItOfficers(officerData);
+    void listItOfficerOptions(accessToken)
+      .then((data) => {
+        if (active) setItOfficers(data);
       })
       .catch((err: unknown) => {
-        if (!active) return;
-        setError(
-          err instanceof Error
-            ? err.message
-            : "Không thể tải kỳ sát hạch hoặc danh sách IT."
-        );
+        if (active) {
+          setError(
+            err instanceof Error ? err.message : "Không thể tải danh sách IT."
+          );
+        }
       })
       .finally(() => {
         if (active) setLoadingOfficers(false);
@@ -362,6 +402,7 @@ export function FileSubmissionsWorkspace() {
 
       if (user?.role === "pc08_staff") {
         const available = await getFileSubmissionOptions(accessToken);
+
         setOptions(available);
       }
     } catch (err) {
@@ -377,13 +418,51 @@ export function FileSubmissionsWorkspace() {
     void load();
   }, [load]);
 
+  function selectSession(id: string) {
+    setSelectedSessionId(id);
+
+    const session = sessions.find((item) => String(item.id) === id);
+
+    setMetadata((current) => ({
+      ...current,
+      examinationSessionId: id,
+      examinationDate: session?.examDate?.slice(0, 10) ?? "",
+    }));
+
+    if (session?.examinationCenterId && fileType === "exam_48") {
+      setCenterId(String(session.examinationCenterId));
+    }
+  }
+
+  function changeFileType(type: SubmissionFileType) {
+    setFileType(type);
+    setSchoolId("");
+    setCenterId("");
+    setSelectedSessionId("");
+    setMetadata({});
+    setFile(null);
+  }
+
   async function handleUpload() {
     if (!accessToken || !file || saving) return;
 
     setError("");
     setSuccess("");
 
-    const validationError = validateMetadata(fileType, metadata);
+    if (needsSession(fileType) && !selectedSessionId) {
+      setError("Vui lòng chọn kỳ sát hạch trước khi gửi hồ sơ.");
+      return;
+    }
+
+    const mergedMetadata: DocumentMetadata = needsSession(fileType)
+      ? {
+          ...metadata,
+          examinationSessionId: selectedSessionId,
+          examinationDate: selectedSession?.examDate?.slice(0, 10) ?? "",
+        }
+      : metadata;
+
+    const validationError = validateMetadata(fileType, mergedMetadata);
 
     if (validationError) {
       setError(validationError);
@@ -393,7 +472,7 @@ export function FileSubmissionsWorkspace() {
     if (
       fileType === "exam_result" &&
       !itOfficers.some(
-        (officer) => formatItOfficer(officer) === metadata.itOfficer
+        (officer) => formatItOfficer(officer) === mergedMetadata.itOfficer
       )
     ) {
       setError("Vui lòng chọn IT trong danh sách.");
@@ -410,6 +489,15 @@ export function FileSubmissionsWorkspace() {
       return;
     }
 
+    if (
+      fileType === "exam_48" &&
+      selectedSession?.examinationCenterId &&
+      Number(centerId) !== Number(selectedSession.examinationCenterId)
+    ) {
+      setError("Trung tâm sát hạch không khớp kỳ đã chọn.");
+      return;
+    }
+
     setSaving(true);
 
     try {
@@ -417,7 +505,10 @@ export function FileSubmissionsWorkspace() {
         file,
         fileType,
         note,
-        documentMetadata: metadata,
+        documentMetadata: mergedMetadata,
+        examinationSessionId: needsSession(fileType)
+          ? Number(selectedSessionId)
+          : null,
         trainingSchoolId: fileType === "bc2_result" ? Number(schoolId) : null,
         examinationCenterId: fileType === "exam_48" ? Number(centerId) : null,
       });
@@ -425,7 +516,10 @@ export function FileSubmissionsWorkspace() {
       setFile(null);
       setNote("");
       setMetadata({});
+      setSelectedSessionId("");
+
       setSuccess("Đã gửi hồ sơ. File đang chờ SUPER_ADMIN duyệt.");
+
       setReload((value) => value + 1);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Không thể gửi file.");
@@ -437,9 +531,16 @@ export function FileSubmissionsWorkspace() {
   function openReplace(item: FileSubmission) {
     setReplaceTarget(item);
     setReplaceFile(null);
+
     setReplacementMetadata({
       ...(item.documentMetadata ?? {}),
+      ...(item.examinationSessionId
+        ? {
+            examinationSessionId: String(item.examinationSessionId),
+          }
+        : {}),
     });
+
     setError("");
   }
 
@@ -448,9 +549,24 @@ export function FileSubmissionsWorkspace() {
       return;
     }
 
+    const currentSession = sessions.find(
+      (session) => session.id === replaceTarget.examinationSessionId
+    );
+
+    const nextMetadata: DocumentMetadata = replaceTarget.examinationSessionId
+      ? {
+          ...replacementMetadata,
+          examinationSessionId: String(replaceTarget.examinationSessionId),
+          examinationDate:
+            currentSession?.examDate?.slice(0, 10) ??
+            replacementMetadata.examinationDate ??
+            "",
+        }
+      : replacementMetadata;
+
     const validationError = validateMetadata(
       replaceTarget.fileType,
-      replacementMetadata
+      nextMetadata
     );
 
     if (validationError) {
@@ -461,7 +577,7 @@ export function FileSubmissionsWorkspace() {
     if (
       replaceTarget.fileType === "exam_result" &&
       !itOfficers.some(
-        (officer) => formatItOfficer(officer) === replacementMetadata.itOfficer
+        (officer) => formatItOfficer(officer) === nextMetadata.itOfficer
       )
     ) {
       setError("Vui lòng chọn IT trong danh sách.");
@@ -477,14 +593,15 @@ export function FileSubmissionsWorkspace() {
         accessToken,
         replaceTarget.id,
         replaceFile,
-        replacementMetadata
+        nextMetadata
       );
 
       setReplaceTarget(null);
       setReplaceFile(null);
       setReplacementMetadata({});
 
-      setSuccess("Đã cập nhật file và thông tin của phiên bản mới.");
+      setSuccess("Đã cập nhật phiên bản mới. Kỳ sát hạch không thay đổi.");
+
       setReload((value) => value + 1);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Không thể thay file.");
@@ -530,6 +647,28 @@ export function FileSubmissionsWorkspace() {
     (item) => item.id === versionSubmissionId
   )?.fileType;
 
+  const canUpload =
+    Boolean(file) &&
+    !saving &&
+    !loadingSessions &&
+    (!needsSession(fileType) || Boolean(selectedSessionId)) &&
+    !validateMetadata(
+      fileType,
+      needsSession(fileType)
+        ? {
+            ...metadata,
+            examinationSessionId: selectedSessionId,
+            examinationDate: selectedSession?.examDate?.slice(0, 10) ?? "",
+          }
+        : metadata
+    ) &&
+    (fileType !== "exam_result" ||
+      itOfficers.some(
+        (officer) => formatItOfficer(officer) === metadata.itOfficer
+      )) &&
+    (fileType !== "bc2_result" || Boolean(schoolId)) &&
+    (fileType !== "exam_48" || Boolean(centerId));
+
   return (
     <Stack spacing={3}>
       <Box>
@@ -538,7 +677,8 @@ export function FileSubmissionsWorkspace() {
         </Typography>
 
         <Typography color="text.secondary">
-          Gửi hồ sơ, theo dõi phê duyệt và quản lý các phiên bản file.
+          Gửi hồ sơ, theo dõi phê duyệt và quản lý các phiên bản file theo kỳ
+          sát hạch.
         </Typography>
       </Box>
 
@@ -568,13 +708,9 @@ export function FileSubmissionsWorkspace() {
             label="Loại file"
             value={allowedTypes.includes(fileType) ? fileType : allowedTypes[0]}
             disabled={saving}
-            onChange={(event) => {
-              setFileType(event.target.value as SubmissionFileType);
-              setSchoolId("");
-              setCenterId("");
-              setMetadata({});
-              setFile(null);
-            }}
+            onChange={(event) =>
+              changeFileType(event.target.value as SubmissionFileType)
+            }
           >
             {allowedTypes.map((type) => (
               <MenuItem key={type} value={type}>
@@ -583,7 +719,64 @@ export function FileSubmissionsWorkspace() {
             ))}
           </TextField>
 
-          {user?.role === "pc08_staff" && fileType === "bc2_result" && (
+          {needsSession(fileType) && (
+            <TextField
+              select
+              required
+              fullWidth
+              size="small"
+              label="Kỳ sát hạch"
+              value={selectedSessionId}
+              disabled={saving || loadingSessions}
+              onChange={(event) => selectSession(event.target.value)}
+              helperText={
+                loadingSessions
+                  ? "Đang tải danh sách kỳ sát hạch..."
+                  : "Kỳ phải được tạo trước khi gửi file."
+              }
+            >
+              <MenuItem value="">Chọn kỳ sát hạch</MenuItem>
+
+              {availableSessions.map((session) => (
+                <MenuItem key={session.id} value={String(session.id)}>
+                  {formatSession(session)}
+                </MenuItem>
+              ))}
+            </TextField>
+          )}
+
+          {fileType === "exam_48" && user?.role === "pc08_staff" && (
+            <TextField
+              select
+              required
+              fullWidth
+              size="small"
+              label="TTSH nhận file dự sát hạch"
+              value={centerId}
+              disabled={saving}
+              onChange={(event) => {
+                setCenterId(event.target.value);
+
+                if (
+                  selectedSession?.examinationCenterId &&
+                  Number(event.target.value) !==
+                    Number(selectedSession.examinationCenterId)
+                ) {
+                  selectSession("");
+                }
+              }}
+            >
+              <MenuItem value="">Chọn TTSH</MenuItem>
+
+              {options.examinationCenters.map((center) => (
+                <MenuItem key={center.id} value={String(center.id)}>
+                  {center.code} — {center.name}
+                </MenuItem>
+              ))}
+            </TextField>
+          )}
+
+          {fileType === "bc2_result" && user?.role === "pc08_staff" && (
             <TextField
               select
               required
@@ -599,27 +792,6 @@ export function FileSubmissionsWorkspace() {
               {options.trainingSchools.map((school) => (
                 <MenuItem key={school.id} value={String(school.id)}>
                   {school.code} — {school.name}
-                </MenuItem>
-              ))}
-            </TextField>
-          )}
-
-          {user?.role === "pc08_staff" && fileType === "exam_48" && (
-            <TextField
-              select
-              required
-              fullWidth
-              size="small"
-              label="TTSH nhận file dự sát hạch"
-              value={centerId}
-              disabled={saving}
-              onChange={(event) => setCenterId(event.target.value)}
-            >
-              <MenuItem value="">Chọn TTSH</MenuItem>
-
-              {options.examinationCenters.map((center) => (
-                <MenuItem key={center.id} value={String(center.id)}>
-                  {center.code} — {center.name}
                 </MenuItem>
               ))}
             </TextField>
@@ -647,9 +819,7 @@ export function FileSubmissionsWorkspace() {
               hidden
               type="file"
               accept=".xml,.xls,.xlsx,.pdf"
-              onChange={(event) => {
-                setFile(event.target.files?.[0] ?? null);
-              }}
+              onChange={(event) => setFile(event.target.files?.[0] ?? null)}
             />
           </Button>
 
@@ -666,25 +836,16 @@ export function FileSubmissionsWorkspace() {
           />
 
           <Alert severity="info">
-            File được lưu trên server và chờ SUPER_ADMIN phê duyệt. Có thể thay
-            file và thông tin khai báo khi hồ sơ chưa được duyệt.
+            File được lưu trên server và chờ SUPER_ADMIN phê duyệt. Các file
+            liên quan kỳ sát hạch sẽ giữ liên kết theo ID ngay cả khi mã kỳ tạm
+            được cập nhật thành mã chính thức.
           </Alert>
 
           <Box>
             <Button
               variant="contained"
               startIcon={<CloudUploadOutlined />}
-              disabled={
-                saving ||
-                !file ||
-                Boolean(validateMetadata(fileType, metadata)) ||
-                (fileType === "exam_result" &&
-                  !itOfficers.some(
-                    (officer) => formatItOfficer(officer) === metadata.itOfficer
-                  )) ||
-                (fileType === "bc2_result" && !schoolId) ||
-                (fileType === "exam_48" && !centerId)
-              }
+              disabled={!canUpload}
               onClick={() => void handleUpload()}
             >
               {saving ? "Đang xử lý..." : "Gửi hồ sơ"}
@@ -718,11 +879,12 @@ export function FileSubmissionsWorkspace() {
         </Stack>
 
         <TableContainer>
-          <Table size="small" sx={{ minWidth: 1000 }}>
+          <Table size="small" sx={{ minWidth: 1100 }}>
             <TableHead>
               <TableRow>
                 <TableCell>File</TableCell>
                 <TableCell>Loại</TableCell>
+                <TableCell>Kỳ sát hạch</TableCell>
                 <TableCell>Trạng thái</TableCell>
                 <TableCell>Phiên bản</TableCell>
                 <TableCell>Thời gian gửi</TableCell>
@@ -769,6 +931,13 @@ export function FileSubmissionsWorkspace() {
                   <TableCell>{FILE_TYPE_LABELS[item.fileType]}</TableCell>
 
                   <TableCell>
+                    {item.examinationSessionCode ??
+                      (item.examinationSessionId
+                        ? `#${item.examinationSessionId}`
+                        : "—")}
+                  </TableCell>
+
+                  <TableCell>
                     <Chip
                       size="small"
                       color={
@@ -789,7 +958,10 @@ export function FileSubmissionsWorkspace() {
                   <TableCell align="right">
                     <Stack
                       direction="row"
-                      sx={{ spacing: 0.5, justifyContent: "flex-end" }}
+                      sx={{
+                        gap: 0.5,
+                        justifyContent: "flex-end",
+                      }}
                     >
                       <Button
                         size="small"
@@ -811,14 +983,7 @@ export function FileSubmissionsWorkspace() {
                         <Button
                           size="small"
                           disabled={saving}
-                          onClick={() => {
-                            setReplaceTarget(item);
-                            setReplaceFile(null);
-                            setReplacementMetadata({
-                              ...(item.documentMetadata ?? {}),
-                            });
-                            setError("");
-                          }}
+                          onClick={() => openReplace(item)}
                         >
                           Thay file
                         </Button>
@@ -830,7 +995,7 @@ export function FileSubmissionsWorkspace() {
 
               {!loading && rows.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={6} align="center" sx={{ py: 5 }}>
+                  <TableCell colSpan={7} align="center" sx={{ py: 5 }}>
                     Chưa có file được gửi.
                   </TableCell>
                 </TableRow>
@@ -857,8 +1022,17 @@ export function FileSubmissionsWorkspace() {
         <DialogContent dividers>
           <Stack spacing={2} sx={{ pt: 1 }}>
             <Typography variant="body2" color="text.secondary">
-              Chọn file mới và xác nhận lại thông tin khai báo trước khi lưu.
+              Chọn file mới và xác nhận thông tin khai báo.
             </Typography>
+
+            {replaceTarget?.examinationSessionId && (
+              <Alert severity="info">
+                Kỳ sát hạch:{" "}
+                {replaceTarget.examinationSessionCode ??
+                  `#${replaceTarget.examinationSessionId}`}
+                . Không thể đổi kỳ khi thay phiên bản.
+              </Alert>
+            )}
 
             <Button component="label" variant="outlined" disabled={saving}>
               {replaceFile ? replaceFile.name : "Chọn file thay thế"}
@@ -867,9 +1041,9 @@ export function FileSubmissionsWorkspace() {
                 hidden
                 type="file"
                 accept=".xml,.xls,.xlsx,.pdf"
-                onChange={(event) => {
-                  setReplaceFile(event.target.files?.[0] ?? null);
-                }}
+                onChange={(event) =>
+                  setReplaceFile(event.target.files?.[0] ?? null)
+                }
               />
             </Button>
 
@@ -920,7 +1094,12 @@ export function FileSubmissionsWorkspace() {
       {versionSubmissionId !== null && (
         <Card variant="outlined" sx={{ p: 2.5, borderRadius: 3 }}>
           <Stack spacing={1.5}>
-            <Stack direction="row" sx={{ justifyContent: "space-between" }}>
+            <Stack
+              direction="row"
+              sx={{
+                justifyContent: "space-between",
+              }}
+            >
               <Typography sx={{ fontWeight: 700 }}>
                 Lịch sử phiên bản hồ sơ #{versionSubmissionId}
               </Typography>
@@ -937,7 +1116,7 @@ export function FileSubmissionsWorkspace() {
                 key={version.id}
                 direction="row"
                 sx={{
-                  spacing: 2,
+                  gap: 2,
                   alignItems: "center",
                   justifyContent: "space-between",
                 }}

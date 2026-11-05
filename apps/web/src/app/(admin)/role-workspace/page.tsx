@@ -29,6 +29,7 @@ export default function RoleWorkspacePage() {
     case "pc08_staff":
       return (
         <Stack spacing={3}>
+          <ReceivedFilesPanel />
           <FileSubmissionsWorkspace />
           <ExamImportStatusPanel />
         </Stack>

@@ -77,6 +77,8 @@ import { FileSubmissionReviewService } from './business/file-submissions/file-su
 import { AdministrativeDivisionsController } from './business/administrative-divisions/administrative-divisions.controller.js';
 import { AdministrativeDivisionsService } from './business/administrative-divisions/administrative-divisions.service.js';
 import { StudentScanService } from './business/students/student-scan.service.js';
+import { ExaminationSessionsController } from './business/examination-sessions/examination-sessions.controller.js';
+import { ExaminationSessionsService } from './business/examination-sessions/examination-sessions.service.js';
 
 const businessEntities = [
   User,
@@ -143,7 +145,8 @@ const businessEntities = [
     ReceivedFilesController,
     IndependentExamAssignmentController,
     FileSubmissionReviewController,
-    AdministrativeDivisionsController
+    AdministrativeDivisionsController,
+    ExaminationSessionsController
   ],
 
   providers: [
@@ -175,7 +178,8 @@ const businessEntities = [
     TrainingSchoolImportService,
     FileSubmissionReviewService,
     AdministrativeDivisionsService,
-    StudentScanService
+    StudentScanService,
+    ExaminationSessionsService
   ],
 })
 export class AppModule {}

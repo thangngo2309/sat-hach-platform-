@@ -27,6 +27,7 @@ type SourceRow = {
   currentVersion: number;
   examinationCenterId: number | null;
   examinationCenterCode: string | null;
+  examinationSessionId: number | null;
   originalName: string;
   storageKey: string;
   sizeBytes: string;
@@ -45,6 +46,15 @@ type ImportOutcome = {
   importBatchId: number | null;
   importResult: Record<string, unknown> | null;
   importError: string | null;
+};
+
+type SelectedSession = {
+  id: number;
+  code: string;
+  officialCode: string | null;
+  examinationCenterId: number;
+  centerCode: string;
+  examDate: string | null;
 };
 
 const STORAGE_ROOT = resolve(
@@ -107,33 +117,33 @@ export class ExamFileApprovalService {
 
     const rows: SourceRow[] = await this.db.query(
       `
-          SELECT
-            s.id,
-            s.file_type AS "fileType",
-            s.status,
-            s.current_version AS "currentVersion",
-            s.examination_center_id AS "examinationCenterId",
-            ec.code AS "examinationCenterCode",
-  
-            v.original_name AS "originalName",
-            v.storage_key AS "storageKey",
-            v.size_bytes::text AS "sizeBytes",
-            v.sha256
-  
-          FROM file_submissions s
-  
-          JOIN file_submission_versions v
-            ON v.submission_id = s.id
-           AND v.version = s.current_version
-  
-          LEFT JOIN examination_centers ec
-            ON ec.id = s.examination_center_id
-  
-          WHERE s.id = $1
-            AND s.file_type IN ('exam_48', 'exam_result')
-  
-          LIMIT 1
-        `,
+        SELECT
+          s.id,
+          s.file_type AS "fileType",
+          s.status,
+          s.current_version AS "currentVersion",
+          s.examination_center_id AS "examinationCenterId",
+          s.examination_session_id AS "examinationSessionId",
+          ec.code AS "examinationCenterCode",
+          v.original_name AS "originalName",
+          v.storage_key AS "storageKey",
+          v.size_bytes::text AS "sizeBytes",
+          v.sha256
+
+        FROM file_submissions s
+
+        JOIN file_submission_versions v
+          ON v.submission_id = s.id
+         AND v.version = s.current_version
+
+        LEFT JOIN examination_centers ec
+          ON ec.id = s.examination_center_id
+
+        WHERE s.id = $1
+          AND s.file_type IN ('exam_48', 'exam_result')
+
+        LIMIT 1
+      `,
       [id],
     );
 
@@ -147,23 +157,24 @@ export class ExamFileApprovalService {
   }
 
   /**
-   * Khóa trạng thái và phiên bản trong transaction.
-   * Không cho phép thay file khi đang import.
+   * Khóa trạng thái hồ sơ trước khi import.
    */
   private async claim(source: SourceRow): Promise<void> {
     await this.db.transaction(async (manager) => {
       const rows: Array<{
         status: string;
         currentVersion: number;
+        examinationSessionId: number | null;
       }> = await manager.query(
         `
-            SELECT
-              status,
-              current_version AS "currentVersion"
-            FROM file_submissions
-            WHERE id = $1
-            FOR UPDATE
-          `,
+          SELECT
+            status,
+            current_version AS "currentVersion",
+            examination_session_id AS "examinationSessionId"
+          FROM file_submissions
+          WHERE id = $1
+          FOR UPDATE
+        `,
         [source.id],
       );
 
@@ -181,16 +192,24 @@ export class ExamFileApprovalService {
         );
       }
 
+      if (
+        Number(rows[0].examinationSessionId) !==
+        Number(source.examinationSessionId)
+      ) {
+        throw new ConflictException('Kỳ sát hạch của hồ sơ đã thay đổi.');
+      }
+
       await manager.query(
         `
-            UPDATE file_submissions
-            SET status = 'processing',
-                import_status = 'processing',
-                import_error = NULL,
-                processing_started_at = NOW(),
-                updated_at = NOW()
-            WHERE id = $1
-          `,
+          UPDATE file_submissions
+          SET
+            status = 'processing',
+            import_status = 'processing',
+            import_error = NULL,
+            processing_started_at = NOW(),
+            updated_at = NOW()
+          WHERE id = $1
+        `,
         [source.id],
       );
     });
@@ -205,14 +224,14 @@ export class ExamFileApprovalService {
   ): Promise<void> {
     await manager.query(
       `
-          INSERT INTO file_submission_events (
-            submission_id,
-            actor_user_id,
-            action,
-            detail
-          )
-          VALUES ($1, $2, $3, $4::jsonb)
-        `,
+        INSERT INTO file_submission_events (
+          submission_id,
+          actor_user_id,
+          action,
+          detail
+        )
+        VALUES ($1, $2, $3, $4::jsonb)
+      `,
       [submissionId, userId, action, JSON.stringify(detail)],
     );
   }
@@ -225,39 +244,43 @@ export class ExamFileApprovalService {
     await this.db.transaction(async (manager) => {
       const updated: Array<{ id: number }> = await manager.query(
         `
-              UPDATE file_submissions
-              SET status = 'approved',
-                  import_status = 'completed',
-                  import_batch_id = $3,
-                  import_result = $4::jsonb,
-                  import_error = NULL,
-                  reviewed_by_user_id = $2,
-                  reviewed_at = NOW(),
-                  import_completed_at = NOW(),
-                  processing_started_at = NULL,
-                  updated_at = NOW()
-              WHERE id = $1
-                AND status = 'processing'
-                AND current_version = $5
-              RETURNING id
-            `,
+            UPDATE file_submissions
+            SET
+              status = 'approved',
+              import_status = 'completed',
+              import_batch_id = $3,
+              import_result = $4::jsonb,
+              import_error = NULL,
+              reviewed_by_user_id = $2,
+              reviewed_at = NOW(),
+              import_completed_at = NOW(),
+              processing_started_at = NULL,
+              updated_at = NOW()
+            WHERE id = $1
+              AND status = 'processing'
+              AND current_version = $5
+              AND examination_session_id = $6
+            RETURNING id
+          `,
         [
           source.id,
           reviewerId,
           result.id,
           JSON.stringify(result),
           source.currentVersion,
+          source.examinationSessionId,
         ],
       );
 
       if (!updated.length) {
         throw new ConflictException(
-          'Trạng thái hồ sơ thay đổi trong khi import.',
+          'Trạng thái hoặc kỳ sát hạch của hồ sơ đã thay đổi.',
         );
       }
 
       await this.addEvent(manager, source.id, reviewerId, 'approved', {
         fileType: source.fileType,
+        examinationSessionId: source.examinationSessionId,
         importStatus: 'completed',
         importBatchId: result.id,
         result,
@@ -268,33 +291,28 @@ export class ExamFileApprovalService {
   private async markFailed(id: number, message: string): Promise<void> {
     await this.db.query(
       `
-          UPDATE file_submissions
-          SET status = 'pending',
-              import_status = 'failed',
-              import_error = $2,
-              processing_started_at = NULL,
-              updated_at = NOW()
-          WHERE id = $1
-            AND status = 'processing'
-        `,
+        UPDATE file_submissions
+        SET
+          status = 'pending',
+          import_status = 'failed',
+          import_error = $2,
+          processing_started_at = NULL,
+          updated_at = NOW()
+        WHERE id = $1
+          AND status = 'processing'
+      `,
       [id, message],
     );
   }
 
-  /**
-   * Nếu import đã commit DB nhưng cập nhật trạng thái
-   * hồ sơ chưa thành công, đối soát theo SHA-256.
-   *
-   * import_batches.file_sha256 có unique constraint.
-   */
   private async findImportedBatch(sha256: string): Promise<number | null> {
     const rows: Array<{ id: number }> = await this.db.query(
       `
-            SELECT id
-            FROM import_batches
-            WHERE file_sha256 = $1
-            LIMIT 1
-          `,
+          SELECT id
+          FROM import_batches
+          WHERE file_sha256 = $1
+          LIMIT 1
+        `,
       [sha256],
     );
 
@@ -327,9 +345,7 @@ export class ExamFileApprovalService {
 
     if (fileInfo.size > maxImportBytes()) {
       throw new BadRequestException(
-        `File vượt giới hạn import ${
-          process.env.FILE_IMPORT_MAX_MB ?? 64
-        } MB. Cần tối ưu parser XML trước khi import file lớn hơn.`,
+        `File vượt giới hạn import ${process.env.FILE_IMPORT_MAX_MB ?? 64} MB.`,
       );
     }
 
@@ -339,54 +355,89 @@ export class ExamFileApprovalService {
       throw new ConflictException('SHA-256 của file không khớp metadata.');
     }
 
-    const buffer = await readFile(path);
-
-    return { path, buffer };
+    return {
+      path,
+      buffer: await readFile(path),
+    };
   }
 
-  private async validateExamResultCenter(
-    sessionCode: string,
-    centerCode: string,
-  ): Promise<void> {
-    const rows: Array<{
-      examinationCenterCode: string;
-    }> = await this.db.query(
+  /**
+   * Truy xuất kỳ dựa trên ID lưu trong
+   * file_submissions, không dựa trên mã từ FE.
+   */
+  private async getSelectedSession(
+    source: SourceRow,
+  ): Promise<SelectedSession> {
+    if (
+      !Number.isSafeInteger(Number(source.examinationSessionId)) ||
+      !source.examinationSessionId ||
+      Number(source.examinationSessionId) <= 0
+    ) {
+      throw new BadRequestException(
+        'Hồ sơ chưa gắn với kỳ sát hạch. ' + 'Phải chọn kỳ khi gửi file.',
+      );
+    }
+
+    const rows: SelectedSession[] = await this.db.query(
       `
           SELECT
-            ec.code AS "examinationCenterCode"
+            es.id,
+            es.code,
+            es.official_code AS "officialCode",
+            es.examination_center_id
+              AS "examinationCenterId",
+            ec.code AS "centerCode",
+            es.exam_date::text AS "examDate"
+
           FROM examination_sessions es
+
           JOIN examination_centers ec
             ON ec.id = es.examination_center_id
-          WHERE es.code = $1
+
+          WHERE es.id = $1
           LIMIT 1
         `,
-      [sessionCode],
+      [source.examinationSessionId],
     );
 
     if (!rows.length) {
+      throw new BadRequestException('Kỳ sát hạch đã chọn không còn tồn tại.');
+    }
+
+    const session = rows[0];
+
+    if (
+      source.examinationCenterId !== null &&
+      Number(source.examinationCenterId) !== Number(session.examinationCenterId)
+    ) {
       throw new BadRequestException(
-        `Chưa có kỳ sát hạch ${sessionCode}. ` +
-          'Phải duyệt và import file 48_ trước.',
+        'TTSH được chỉ định trên hồ sơ ' +
+          'không khớp TTSH quản lý kỳ sát hạch.',
       );
     }
 
     if (
-      normalizeCode(rows[0].examinationCenterCode) !== normalizeCode(centerCode)
+      source.examinationCenterCode &&
+      normalizeCode(source.examinationCenterCode) !==
+        normalizeCode(session.centerCode)
     ) {
       throw new BadRequestException(
-        'Trung tâm sát hạch của file KQSH không khớp ' +
-          'với trung tâm quản lý kỳ sát hạch.',
+        'Mã TTSH trên hồ sơ không khớp kỳ sát hạch.',
       );
     }
+
+    return session;
   }
 
+  /**
+   * Import file sau khi kiểm tra mã kỳ,
+   * trung tâm và nội dung XML.
+   */
   private async importFile(
     source: SourceRow,
     userId: number,
   ): Promise<ImportResult> {
-    if (!source.examinationCenterCode) {
-      throw new BadRequestException('Hồ sơ chưa có trung tâm sát hạch hợp lệ.');
-    }
+    const selectedSession = await this.getSelectedSession(source);
 
     const { path, buffer } = await this.verifySourceFile(source);
 
@@ -410,12 +461,36 @@ export class ExamFileApprovalService {
 
       if (
         normalizeCode(xmlCenterCode) !==
-        normalizeCode(source.examinationCenterCode)
+        normalizeCode(selectedSession.centerCode)
       ) {
         throw new BadRequestException(
           `Mã TTSH trong file 48_ (${xmlCenterCode}) ` +
-            `không khớp TTSH được chỉ định ` +
-            `(${source.examinationCenterCode}).`,
+            `không khớp TTSH kỳ đã chọn ` +
+            `(${selectedSession.centerCode}).`,
+        );
+      }
+
+      if (
+        selectedSession.examDate &&
+        preview.session.examDate &&
+        selectedSession.examDate.slice(0, 10) !==
+          preview.session.examDate.slice(0, 10)
+      ) {
+        throw new BadRequestException(
+          'Ngày sát hạch trong file 48_ ' + 'không khớp ngày của kỳ đã chọn.',
+        );
+      }
+
+      if (
+        selectedSession.officialCode &&
+        normalizeCode(selectedSession.officialCode) !==
+          normalizeCode(preview.session.code)
+      ) {
+        throw new ConflictException(
+          `Kỳ đã có mã chính thức ` +
+            `${selectedSession.officialCode}, ` +
+            `khác mã trong file 48_ ` +
+            `${preview.session.code}.`,
         );
       }
 
@@ -426,15 +501,36 @@ export class ExamFileApprovalService {
         );
       }
 
-      return this.examListImport.confirm(file, userId);
+      /**
+       * confirm() đã được cập nhật ở Bước 3:
+       * nhận examinationSessionId ở tham số 3.
+       */
+      return this.examListImport.confirm(file, userId, selectedSession.id);
+    }
+
+    /**
+     * KQSH chỉ được import sau khi file 48_
+     * đã cung cấp mã kỳ chính thức.
+     */
+    if (!selectedSession.officialCode) {
+      throw new BadRequestException(
+        'Kỳ sát hạch chưa có mã chính thức. ' +
+          'Cần duyệt và import file 48_ trước.',
+      );
     }
 
     const preview = await this.examResultImport.preview(file);
 
-    await this.validateExamResultCenter(
-      preview.sessionCode,
-      source.examinationCenterCode,
-    );
+    if (
+      normalizeCode(preview.sessionCode) !==
+      normalizeCode(selectedSession.officialCode)
+    ) {
+      throw new BadRequestException(
+        `Mã kỳ trong KQSH (${preview.sessionCode}) ` +
+          `không khớp mã kỳ đã chọn ` +
+          `(${selectedSession.officialCode}).`,
+      );
+    }
 
     if (preview.alreadyImported) {
       throw new ConflictException(
@@ -443,9 +539,21 @@ export class ExamFileApprovalService {
       );
     }
 
+    if (!preview.canImport) {
+      throw new ConflictException(
+        'Dữ liệu KQSH chưa khớp danh sách dự sát hạch.',
+      );
+    }
+
     return this.examResultImport.confirm(file, userId);
   }
 
+  /**
+   * SUPER_ADMIN phê duyệt và import.
+   *
+   * Giữ nguyên response để không làm
+   * ảnh hưởng các panel trạng thái hiện có.
+   */
   async approve(user: AuthUser, id: number): Promise<ImportOutcome> {
     this.assertSuperAdmin(user);
 
@@ -458,11 +566,6 @@ export class ExamFileApprovalService {
     await this.claim(source);
 
     try {
-      /**
-       * Chặn import trùng trước khi chạy parser.
-       * Nếu bản file đã được import từ luồng cũ,
-       * không tự tuyên bố đây là lần import mới.
-       */
       const existingBatch = await this.findImportedBatch(source.sha256);
 
       if (existingBatch) {

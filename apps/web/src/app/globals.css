@@ -1,5 +1,30 @@
 
-* {
+/**
+ * ============================================
+ * GLOBAL FONT
+ * ============================================
+ *
+ * Sử dụng Inter do Next.js cung cấp.
+ * Không phụ thuộc font có sẵn trên thiết bị.
+ */
+
+ :root {
+  font-family: var(--font-inter), Arial, sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/**
+ * ============================================
+ * RESET
+ * ============================================
+ */
+
+*,
+*::before,
+*::after {
   box-sizing: border-box;
 }
 
@@ -7,18 +32,65 @@ html,
 body {
   margin: 0;
   min-height: 100%;
+  width: 100%;
+}
+
+html {
+  font-family: var(--font-inter), Arial, sans-serif;
 }
 
 body {
   background: #f4f7fb;
   color: #172335;
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-inter), Arial, sans-serif;
 }
 
+/**
+ * ============================================
+ * FORM ELEMENTS
+ * ============================================
+ */
+
 button,
-input {
-  font: inherit;
+input,
+textarea,
+select {
+  font-family: inherit;
 }
+
+/**
+ * ============================================
+ * MUI COMPONENT FONT
+ * ============================================
+ *
+ * Đồng bộ font trên các thành phần MUI
+ * như Typography, Button, TextField,
+ * Select, Menu, Dialog, Table và Tooltip.
+ */
+
+.MuiTypography-root,
+.MuiButton-root,
+.MuiInputBase-root,
+.MuiInputLabel-root,
+.MuiFormLabel-root,
+.MuiFormHelperText-root,
+.MuiMenuItem-root,
+.MuiTableCell-root,
+.MuiChip-root,
+.MuiDialogTitle-root,
+.MuiDialogContent-root,
+.MuiAlert-root,
+.MuiTooltip-tooltip,
+.MuiListItemText-root,
+.MuiTab-root {
+  font-family: var(--font-inter), Arial, sans-serif;
+}
+
+/**
+ * ============================================
+ * LINKS
+ * ============================================
+ */
 
 a {
   color: inherit;

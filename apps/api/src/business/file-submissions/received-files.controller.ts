@@ -14,6 +14,7 @@ import type { Response } from 'express';
 
 import { JwtAuthGuard } from '../../shared/guards/jwt-auth.guard.js';
 import { RolesGuard } from '../../shared/guards/roles.guard.js';
+
 import { Roles } from '../../shared/decorators/roles.decorator.js';
 import { CurrentUser } from '../../shared/decorators/current-user.decorator.js';
 
@@ -24,7 +25,7 @@ import { ReceivedFilesService } from './received-files.service.js';
 
 @Controller('received-files')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(UserRole.TRAINING_SCHOOL, UserRole.EXAM_CENTER)
+@Roles(UserRole.TRAINING_SCHOOL, UserRole.EXAM_CENTER, UserRole.PC08_STAFF)
 export class ReceivedFilesController {
   constructor(private readonly service: ReceivedFilesService) {}
 
@@ -61,6 +62,7 @@ export class ReceivedFilesController {
     } catch (error) {
       if (response.headersSent) {
         response.destroy(error instanceof Error ? error : undefined);
+
         return;
       }
 
