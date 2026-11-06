@@ -13,6 +13,7 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
+  Divider,
   MenuItem,
   Stack,
   Table,
@@ -50,6 +51,7 @@ import {
   type SubmissionStatus,
 } from "@/lib/file-submissions";
 import { Exam48ApprovalDialog } from "@/components/file-submissions/Exam48ApprovalDialog";
+import { Pc08FinalResultsWorkspace } from "@/components/examination-sessions/Pc08FinalResultsWorkspace";
 
 type FilterStatus = Exclude<SubmissionStatus, "processing"> | "all";
 
@@ -728,6 +730,9 @@ export default function FileApprovalsPage() {
           await review(exam48Target, "approve", undefined, selectedFileIds);
         }}
       />
+      <Divider sx={{ my: 1 }} />
+
+      <Pc08FinalResultsWorkspace />
     </Stack>
   );
 }

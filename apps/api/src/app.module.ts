@@ -86,6 +86,8 @@ import { Exam48ApprovalOptionsService } from './business/file-submissions/exam48
 import { FileSubmissionXmlLinkService } from './business/file-submissions/file-submission-xml-link.service.js';
 import { ExaminationSessionScansController } from './business/examination-sessions/examination-session-scans.controller.js';
 import { ExaminationSessionScansService } from './business/examination-sessions/examination-session-scans.service.js';
+import { Pc08FinalResultsController } from './business/examination-sessions/pc08-final-results.controller.js';
+import { Pc08FinalResultsService } from './business/examination-sessions/pc08-final-results.service.js';
 
 const businessEntities = [
   User,
@@ -156,7 +158,8 @@ const businessEntities = [
     ExaminationSessionsController,
     ExaminationSessionSecretariesController,
     Exam48ApprovalOptionsController,
-    ExaminationSessionScansController
+    ExaminationSessionScansController,
+    Pc08FinalResultsController
   ],
 
   providers: [
@@ -193,7 +196,8 @@ const businessEntities = [
     ExaminationSessionSecretariesService,
     Exam48ApprovalOptionsService,
     FileSubmissionXmlLinkService,
-    ExaminationSessionScansService
+    ExaminationSessionScansService,
+    Pc08FinalResultsService
   ],
 })
 export class AppModule {}

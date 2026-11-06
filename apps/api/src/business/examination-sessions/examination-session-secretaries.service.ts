@@ -413,61 +413,37 @@ export class ExaminationSessionSecretariesService {
 
     const sessionId = positiveId(sessionIdInput, 'ID kỳ sát hạch');
 
-    await this.db.transaction(async (manager) => {
-      const rows: Array<{
-        examDate: string | null;
-        completedAt: Date | null;
-      }> = await manager.query(
-        `
-            SELECT
-              exam_date::text AS "examDate",
-              completed_at AS "completedAt"
-            FROM examination_sessions
-            WHERE id = $1
-            FOR UPDATE
-          `,
-        [sessionId],
-      );
+    const rows: Array<{ id: number }> = await this.db.query(
+      `
+        SELECT id
+        FROM examination_sessions
+        WHERE id = $1
+        LIMIT 1
+      `,
+      [sessionId],
+    );
 
-      if (!rows.length) {
-        throw new NotFoundException('Kỳ sát hạch không tồn tại.');
-      }
+    if (!rows.length) {
+      throw new NotFoundException('Kỳ sát hạch không tồn tại.');
+    }
 
-      if (rows[0].completedAt) {
-        throw new ConflictException('Kỳ đã được xác nhận hoàn tất.');
-      }
-
-      if (!rows[0].examDate) {
-        throw new BadRequestException('Kỳ sát hạch chưa có ngày tổ chức.');
-      }
-
-      const todayRows: Array<{ today: string }> = await manager.query(
-        `
-              SELECT
-                (
-                  NOW() AT TIME ZONE 'Asia/Ho_Chi_Minh'
-                )::date::text AS today
-            `,
-      );
-
-      if (rows[0].examDate > todayRows[0].today) {
-        throw new BadRequestException('Chưa đến ngày sát hạch.');
-      }
-
-      await manager.query(
-        `
-            UPDATE examination_sessions
-            SET
-              completed_at = NOW(),
-              completed_by_user_id = $2,
-              updated_at = NOW()
-            WHERE id = $1
-          `,
-        [sessionId, user.sub],
-      );
-    });
-
-    return this.detail(user, sessionId);
+    /**
+     * Nghiệp vụ mới:
+     *
+     * IT PC08 không còn được phép
+     * đánh dấu hoàn tất kỳ thủ công.
+     *
+     * Chỉ quy trình duyệt và phát hành
+     * đầy đủ KQSH cuối cùng của các CSĐT
+     * mới được cập nhật completed_at.
+     */
+    throw new ConflictException(
+      'Không thể hoàn tất kỳ sát hạch thủ công. ' +
+        'IT PC08 phải gửi đầy đủ KQSH cuối cùng ' +
+        'cho các CSĐT và xác nhận đã gửi đủ. ' +
+        'Kỳ chỉ kết thúc sau khi SUPER_ADMIN ' +
+        'phê duyệt và phát hành toàn bộ kết quả.',
+    );
   }
 
   async updateTracking(

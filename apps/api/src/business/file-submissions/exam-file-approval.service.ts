@@ -243,8 +243,13 @@ export class ExamFileApprovalService {
   ): Promise<void> {
     await this.db.transaction(async (manager) => {
       /**
-       * 1. Đánh dấu file đã được duyệt
-       * và import thành công.
+       * Duyệt và import file 48_ hoặc KQSH ban đầu.
+       *
+       * LƯU Ý NGHIỆP VỤ:
+       * KQSH do TTSH gửi chỉ là kết quả ban đầu
+       * để PC08 tiếp tục xử lý.
+       *
+       * Không được cập nhật completed_at tại đây.
        */
       const updated: Array<{ id: number }> = await manager.query(
         `
@@ -283,121 +288,16 @@ export class ExamFileApprovalService {
         );
       }
 
-      /**
-       * 2. Riêng file KQSH:
-       * Duyệt và import thành công => hoàn tất kỳ.
-       *
-       * Không áp dụng cho BC1, BC2 hoặc 48_.
-       */
-      if (source.fileType === 'exam_result') {
-        const sessionCode =
-          typeof result.sessionCode === 'string'
-            ? result.sessionCode.trim()
-            : '';
-
-        if (!sessionCode) {
-          throw new ConflictException(
-            'KQSH import thành công nhưng không trả về mã kỳ sát hạch.',
-          );
-        }
-
-        /**
-         * Xác minh kỳ chính thức từ kết quả import,
-         * đồng thời đối chiếu với kỳ và TTSH
-         * được liên kết ở file_submissions.
-         */
-        const sessions: Array<{
-          id: number;
-          completedAt: Date | null;
-        }> = await manager.query(
-          `
-          SELECT
-            es.id,
-            es.completed_at AS "completedAt"
-          FROM examination_sessions es
-          WHERE UPPER(TRIM(es.official_code)) =
-                UPPER(TRIM($1::text))
-            AND (
-              $2::integer IS NULL
-              OR es.id = $2::integer
-            )
-            AND (
-              $3::integer IS NULL
-              OR es.examination_center_id = $3::integer
-            )
-          FOR UPDATE
-        `,
-          [
-            sessionCode,
-            source.examinationSessionId,
-            source.examinationCenterId,
-          ],
-        );
-
-        if (sessions.length !== 1) {
-          throw new ConflictException(
-            'Không xác định được duy nhất kỳ sát hạch ' +
-              'tương ứng với KQSH đã import.',
-          );
-        }
-
-        const sessionId = Number(sessions[0].id);
-
-        /**
-         * Chỉ ghi thời gian hoàn tất lần đầu.
-         *
-         * Nếu PC08 đã xác nhận kỳ trước đó,
-         * giữ nguyên thông tin xác nhận cũ.
-         */
-        await manager.query(
-          `
-          UPDATE examination_sessions
-          SET
-            completed_by_user_id = CASE
-              WHEN completed_at IS NULL
-                THEN $2
-              ELSE completed_by_user_id
-            END,
-            completed_at = COALESCE(
-              completed_at,
-              NOW()
-            ),
-            updated_at = NOW()
-          WHERE id = $1
-        `,
-          [sessionId, reviewerId],
-        );
-
-        /**
-         * Ghi lịch sử tự động hoàn tất kỳ.
-         */
-        await this.addEvent(
-          manager,
-          source.id,
-          reviewerId,
-          'exam_session_completed',
-          {
-            examinationSessionId: sessionId,
-            sessionCode,
-            importBatchId: result.id,
-            completedBy: 'exam_result_approval',
-            alreadyCompleted: Boolean(sessions[0].completedAt),
-          },
-        );
-      }
-
-      /**
-       * 3. Ghi lịch sử duyệt hồ sơ.
-       *
-       * Các thay đổi file và trạng thái kỳ
-       * cùng nằm trong transaction này.
-       */
       await this.addEvent(manager, source.id, reviewerId, 'approved', {
         fileType: source.fileType,
         examinationSessionId: source.examinationSessionId,
         importStatus: 'completed',
         importBatchId: result.id,
         result,
+        workflowStage:
+          source.fileType === 'exam_result'
+            ? 'awaiting_pc08_final_results'
+            : 'exam_list_approved',
       });
     });
   }

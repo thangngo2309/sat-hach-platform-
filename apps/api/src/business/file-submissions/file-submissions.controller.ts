@@ -254,7 +254,22 @@ export class FileSubmissionsController {
     }
 
     if (fileType === 'exam_48') {
+      if (!Array.isArray(body?.selectedFileIds)) {
+        throw new BadRequestException(
+          'Vui lòng chọn danh sách BC1, BC2 trước khi duyệt file 48_.',
+        );
+      }
+
       const selectedFileIds = [...new Set(body.selectedFileIds)];
+
+      if (
+        selectedFileIds.length > 500 ||
+        selectedFileIds.some(
+          (fileId) => !Number.isSafeInteger(fileId) || fileId <= 0,
+        )
+      ) {
+        throw new BadRequestException('Danh sách BC1, BC2 không hợp lệ.');
+      }
 
       return this.examApproval.approve(user, id, selectedFileIds);
     }

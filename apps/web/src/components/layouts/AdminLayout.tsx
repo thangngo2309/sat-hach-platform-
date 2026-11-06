@@ -45,6 +45,7 @@ import type { SvgIconComponent } from "@mui/icons-material";
 import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "@/components/auth/AuthProvider";
 import FolderOutlined from "@mui/icons-material/FolderOutlined";
+import { AppFooter } from "./AppFooter";
 
 const DRAWER_WIDTH = 260;
 const COLLAPSED_WIDTH = 76;
@@ -803,7 +804,11 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
           minHeight: "100vh",
           bgcolor: "#f5f7fb",
           pt: "68px",
-          transition: theme.transitions.create("width", { duration: 200 }),
+          display: "flex",
+          flexDirection: "column",
+          transition: theme.transitions.create("width", {
+            duration: 200,
+          }),
         }}
       >
         <Box
@@ -815,6 +820,7 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
         >
           {children}
         </Box>
+        <AppFooter />
       </Box>
     </Box>
   );
