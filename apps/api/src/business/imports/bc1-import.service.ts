@@ -112,14 +112,13 @@ export class Bc1ImportService {
       const batchId = Number(batchRows[0].id);
 
       /**
-       * Tạo CSĐT khi mã chưa tồn tại.
+       * Tạo cơ sở đào tạo nếu chưa tồn tại.
        *
-       * Nếu đã có CSĐT từ Excel hoặc do Admin
-       * nhập/chỉnh sửa thủ công, không ghi đè
-       * tên, tỉnh/thành và các thông tin quản trị.
+       * Khi mã đã tồn tại, ưu tiên cập nhật
+       * thông tin có trong XML.
        *
-       * Vẫn RETURNING id để tiếp tục nhập khóa học,
-       * học viên và ghi danh bình thường.
+       * Không sử dụng dữ liệu rỗng để xóa
+       * tỉnh/thành đã lưu trước đó.
        */
       const schoolRows = await manager.query(
         `
@@ -134,35 +133,19 @@ export class Bc1ImportService {
 
           ON CONFLICT (code) DO UPDATE SET
 
-            name = CASE
-              WHEN training_schools.info_source = 'xml'
-                THEN EXCLUDED.name
-              ELSE training_schools.name
-            END,
+            name = EXCLUDED.name,
 
-            province_code = CASE
-              WHEN training_schools.info_source = 'xml'
-                THEN COALESCE(
-                  EXCLUDED.province_code,
-                  training_schools.province_code
-                )
-              ELSE training_schools.province_code
-            END,
+            province_code = COALESCE(
+              EXCLUDED.province_code,
+              training_schools.province_code
+            ),
 
-            province_name = CASE
-              WHEN training_schools.info_source = 'xml'
-                THEN COALESCE(
-                  EXCLUDED.province_name,
-                  training_schools.province_name
-                )
-              ELSE training_schools.province_name
-            END,
+            province_name = COALESCE(
+              EXCLUDED.province_name,
+              training_schools.province_name
+            ),
 
-            updated_at = CASE
-              WHEN training_schools.info_source = 'xml'
-                THEN NOW()
-              ELSE training_schools.updated_at
-            END
+            updated_at = NOW()
 
           RETURNING id
         `,
@@ -176,6 +159,13 @@ export class Bc1ImportService {
 
       const schoolId = Number(schoolRows[0].id);
 
+      /**
+       * Khóa học được nhận diện theo:
+       * school_id + course.code.
+       *
+       * Nếu đã tồn tại, cập nhật thông tin
+       * theo BC1 mới nhất.
+       */
       const courseRows = await manager.query(
         `
           INSERT INTO courses (
@@ -195,29 +185,37 @@ export class Bc1ImportService {
           )
 
           ON CONFLICT (school_id, code) DO UPDATE SET
+
             name = EXCLUDED.name,
+
             bc1_code = COALESCE(
               EXCLUDED.bc1_code,
               courses.bc1_code
             ),
+
             license_class = COALESCE(
               EXCLUDED.license_class,
               courses.license_class
             ),
+
             training_class = COALESCE(
               EXCLUDED.training_class,
               courses.training_class
             ),
+
             opening_date = COALESCE(
               EXCLUDED.opening_date,
               courses.opening_date
             ),
+
             closing_date = COALESCE(
               EXCLUDED.closing_date,
               courses.closing_date
             ),
+
             declared_student_count =
               EXCLUDED.declared_student_count,
+
             updated_at = NOW()
 
           RETURNING id
@@ -251,21 +249,23 @@ export class Bc1ImportService {
           document.course.licenseClass?.trim().toUpperCase() ?? '';
 
         /**
-         * 1. Ưu tiên đối chiếu mã đăng ký BC1.
+         * 1. Kiểm tra mã đăng ký chính thức.
+         *
+         * Nếu mã đã có trong DB, không được
+         * ghép với CCCD khác.
          */
         const byRegistration: Array<{
           id: number;
           identityNumber: string | null;
         }> = await manager.query(
           `
-      SELECT
-        id,
-        identity_number AS "identityNumber"
-      FROM students
-      WHERE registration_code = $1
-      LIMIT 1
-      FOR UPDATE
-    `,
+            SELECT
+              id,
+              identity_number AS "identityNumber"
+            FROM students
+            WHERE registration_code = $1
+            FOR UPDATE
+          `,
           [student.registrationCode],
         );
 
@@ -281,8 +281,7 @@ export class Bc1ImportService {
             identityNumber !== existingIdentity
           ) {
             throw new ConflictException(
-              `Mã đăng ký ${student.registrationCode} ` +
-                'đã tồn tại nhưng CCCD không khớp.',
+              `Mã đăng ký ${student.registrationCode} ` + 'đã thuộc CCCD khác.',
             );
           }
 
@@ -290,137 +289,218 @@ export class Bc1ImportService {
         }
 
         /**
-         * 2. Khi mã BC1 chưa có:
-         *    tìm học viên nhập tay theo CCCD và hạng thi.
+         * 2. Nếu chưa có mã đăng ký:
+         *    tìm theo CCCD và hạng thi.
          *
-         * Chỉ ghép khi có đúng một kết quả.
+         * Xét các nguồn:
+         * - Hồ sơ tiếp nhận thí sinh tự do
+         * - Khóa học đã ghi danh
+         * - Danh sách sát hạch
+         *
+         * Không gộp nếu có hơn một học viên.
          */
         if (studentId === null && identityNumber && licenseClass) {
-          const matched: Array<{ id: number }> = await manager.query(
+          const matches: Array<{ id: number }> = await manager.query(
             `
-        SELECT s.id
-        FROM students s
-        WHERE s.source_type = 'manual'
-          AND REGEXP_REPLACE(
-            COALESCE(s.identity_number, ''),
-            '\\s+',
-            '',
-            'g'
-          ) = $1
-          AND EXISTS (
-            SELECT 1
-            FROM student_intakes si
-            WHERE si.student_id = s.id
-              AND (
-                UPPER(TRIM(
-                  COALESCE(si.requested_license_class, '')
-                )) = $2
-                OR UPPER(TRIM(
-                  COALESCE(si.training_license_class, '')
-                )) = $2
-              )
-          )
-        ORDER BY s.id
-        LIMIT 2
-        FOR UPDATE OF s
-      `,
+                SELECT s.id
+                FROM students s
+
+                WHERE regexp_replace(
+                  COALESCE(s.identity_number, ''),
+                  '[[:space:]]',
+                  '',
+                  'g'
+                ) = $1
+
+                AND (
+                  EXISTS (
+                    SELECT 1
+                    FROM student_intakes si
+
+                    WHERE si.student_id = s.id
+                      AND (
+                        UPPER(TRIM(
+                          COALESCE(
+                            si.requested_license_class,
+                            ''
+                          )
+                        )) = $2
+
+                        OR UPPER(TRIM(
+                          COALESCE(
+                            si.training_license_class,
+                            ''
+                          )
+                        )) = $2
+                      )
+                  )
+
+                  OR EXISTS (
+                    SELECT 1
+                    FROM enrollments e
+
+                    JOIN courses c
+                      ON c.id = e.course_id
+
+                    WHERE e.student_id = s.id
+                      AND UPPER(TRIM(
+                        COALESCE(c.license_class, '')
+                      )) = $2
+                  )
+
+                  OR EXISTS (
+                    SELECT 1
+                    FROM examination_candidates ec
+
+                    WHERE ec.student_id = s.id
+                      AND UPPER(TRIM(
+                        COALESCE(ec.license_class, '')
+                      )) = $2
+                  )
+                )
+
+                ORDER BY s.id
+                LIMIT 2
+                FOR UPDATE OF s
+              `,
             [identityNumber, licenseClass],
           );
 
-          if (matched.length > 1) {
+          if (matches.length > 1) {
             throw new ConflictException(
-              `CCCD ${identityNumber}, hạng ${licenseClass} ` +
-                'trùng nhiều hồ sơ nhập tay. ' +
-                'Cần đối chiếu trước khi import BC1.',
+              `CCCD ${identityNumber}, ` +
+                `hạng ${licenseClass} ` +
+                'khớp nhiều hồ sơ. ' +
+                'Cần đối soát trước khi import BC1.',
             );
           }
 
-          if (matched.length === 1) {
-            studentId = Number(matched[0].id);
-
-            /**
-             * Giữ nguyên ID, mã đăng ký TD-...,
-             * các hồ sơ tiếp nhận và phân công cũ.
-             *
-             * Bổ sung thông tin cá nhân từ BC1,
-             * không dùng giá trị rỗng để xóa dữ liệu có sẵn.
-             */
-            await manager.query(
-              `
-          UPDATE students
-          SET full_name = COALESCE(
-                NULLIF($2::text, ''), full_name
-              ),
-              family_name = COALESCE(
-                NULLIF($3::text, ''), family_name
-              ),
-              given_name = COALESCE(
-                NULLIF($4::text, ''), given_name
-              ),
-              date_of_birth = COALESCE(
-                $5::date, date_of_birth
-              ),
-              gender = COALESCE(
-                NULLIF($6::text, ''), gender
-              ),
-              nationality_code = COALESCE(
-                NULLIF($7::text, ''), nationality_code
-              ),
-              nationality_name = COALESCE(
-                NULLIF($8::text, ''), nationality_name
-              ),
-              permanent_address = COALESCE(
-                NULLIF($9::text, ''), permanent_address
-              ),
-              current_address = COALESCE(
-                NULLIF($10::text, ''), current_address
-              ),
-              updated_at = NOW()
-          WHERE id = $1
-        `,
-              [
-                studentId,
-                student.fullName ?? '',
-                student.familyName ?? '',
-                student.givenName ?? '',
-                student.dateOfBirth || null,
-                student.gender ?? '',
-                student.nationalityCode ?? '',
-                student.nationalityName ?? '',
-                student.permanentAddress ?? '',
-                student.currentAddress ?? '',
-              ],
-            );
+          if (matches.length === 1) {
+            studentId = Number(matches[0].id);
           }
         }
 
         /**
-         * 3. Chưa có học viên phù hợp:
-         *    tạo mới theo luồng BC1 đang sử dụng.
+         * 3. Khi đã nhận diện được học viên:
+         *
+         * - Giữ nguyên students.id
+         * - Giữ nguyên hồ sơ tiếp nhận
+         * - Giữ nguyên ảnh và lịch sử
+         * - Cập nhật mã đăng ký chính thức
+         * - Ghi đè thông tin hợp lệ từ BC1
+         *
+         * Trường không có giá trị từ XML
+         * giữ nguyên dữ liệu hiện tại.
+         */
+        if (studentId !== null) {
+          await manager.query(
+            `
+              UPDATE students
+
+              SET
+                registration_code = $2,
+
+                full_name = $3,
+
+                family_name = COALESCE(
+                  NULLIF($4::text, ''),
+                  family_name
+                ),
+
+                given_name = COALESCE(
+                  NULLIF($5::text, ''),
+                  given_name
+                ),
+
+                date_of_birth = COALESCE(
+                  $6::date,
+                  date_of_birth
+                ),
+
+                gender = COALESCE(
+                  NULLIF($7::text, ''),
+                  gender
+                ),
+
+                identity_number = COALESCE(
+                  NULLIF($8::text, ''),
+                  identity_number
+                ),
+
+                nationality_code = COALESCE(
+                  NULLIF($9::text, ''),
+                  nationality_code
+                ),
+
+                nationality_name = COALESCE(
+                  NULLIF($10::text, ''),
+                  nationality_name
+                ),
+
+                permanent_address = COALESCE(
+                  NULLIF($11::text, ''),
+                  permanent_address
+                ),
+
+                current_address = COALESCE(
+                  NULLIF($12::text, ''),
+                  current_address
+                ),
+
+                updated_at = NOW()
+
+              WHERE id = $1
+            `,
+            [
+              studentId,
+              student.registrationCode,
+              student.fullName,
+              student.familyName,
+              student.givenName,
+              student.dateOfBirth,
+              student.gender,
+              identityNumber || null,
+              student.nationalityCode,
+              student.nationalityName,
+              student.permanentAddress,
+              student.currentAddress,
+            ],
+          );
+        }
+
+        /**
+         * 4. Chưa tìm được học viên phù hợp:
+         *    tạo mới theo BC1.
          */
         if (studentId === null) {
-          const insertedStudents: Array<{ id: number }> = await manager.query(
+          const insertedStudents: Array<{
+            id: number;
+          }> = await manager.query(
             `
-          INSERT INTO students (
-            registration_code,
-            full_name,
-            family_name,
-            given_name,
-            date_of_birth,
-            gender,
-            identity_number,
-            nationality_code,
-            nationality_name,
-            permanent_address,
-            current_address
-          )
-          VALUES (
-            $1, $2, $3, $4, $5, $6,
-            $7, $8, $9, $10, $11
-          )
-          ON CONFLICT (registration_code) DO NOTHING
-          RETURNING id
-        `,
+              INSERT INTO students (
+                registration_code,
+                full_name,
+                family_name,
+                given_name,
+                date_of_birth,
+                gender,
+                identity_number,
+                nationality_code,
+                nationality_name,
+                permanent_address,
+                current_address
+              )
+
+              VALUES (
+                $1, $2, $3, $4, $5, $6,
+                $7, $8, $9, $10, $11
+              )
+
+              ON CONFLICT (registration_code)
+              DO NOTHING
+
+              RETURNING id
+            `,
             [
               student.registrationCode,
               student.fullName,
@@ -448,8 +528,11 @@ export class Bc1ImportService {
           }
         }
 
-        // Giữ nguyên các phần lưu ảnh và ghi danh phía dưới.
-
+        /**
+         * 5. Lưu ảnh học viên từ BC1.
+         *
+         * Giữ cơ chế lưu ảnh hiện có.
+         */
         const photoBase64 = photos.get(student.registrationCode);
 
         if (photoBase64) {
@@ -461,6 +544,12 @@ export class Bc1ImportService {
           });
         }
 
+        /**
+         * 6. Ghi danh học viên vào khóa học.
+         *
+         * Nếu đã có ghi danh, cập nhật
+         * dữ liệu file BC1 mới nhất.
+         */
         const enrollmentRows = await manager.query(
           `
             INSERT INTO enrollments (
@@ -470,8 +559,12 @@ export class Bc1ImportService {
               source_order,
               source_import_id
             )
+
             VALUES ($1, $2, $3, $4, $5)
-            ON CONFLICT (course_id, student_id) DO NOTHING
+
+            ON CONFLICT (course_id, student_id)
+            DO NOTHING
+
             RETURNING id
           `,
           [courseId, studentId, student.fileNumber, student.order, batchId],
@@ -480,16 +573,45 @@ export class Bc1ImportService {
         if (enrollmentRows.length) {
           newEnrollments++;
         } else {
+          await manager.query(
+            `
+              UPDATE enrollments
+
+              SET
+                file_number = COALESCE(
+                  $3,
+                  file_number
+                ),
+
+                source_order = COALESCE(
+                  $4,
+                  source_order
+                ),
+
+                source_import_id = $5
+
+              WHERE course_id = $1
+                AND student_id = $2
+            `,
+            [courseId, studentId, student.fileNumber, student.order, batchId],
+          );
+
           skippedEnrollments++;
         }
       }
 
+      /**
+       * 7. Lưu thống kê import batch.
+       */
       await manager.query(
         `
           UPDATE import_batches
-          SET new_students = $2,
-              new_enrollments = $3,
-              skipped_enrollments = $4
+
+          SET
+            new_students = $2,
+            new_enrollments = $3,
+            skipped_enrollments = $4
+
           WHERE id = $1
         `,
         [batchId, newStudents, newEnrollments, skippedEnrollments],
@@ -528,10 +650,18 @@ export class Bc1ImportService {
           b.skipped_enrollments AS "skippedEnrollments",
           b.imported_at AS "importedAt",
           u.username AS "importedBy"
+
         FROM import_batches b
-        LEFT JOIN users u ON u.id = b.imported_by
+
+        LEFT JOIN users u
+          ON u.id = b.imported_by
+
         WHERE b.type = 'BC1'
-        ORDER BY b.imported_at DESC, b.id DESC
+
+        ORDER BY
+          b.imported_at DESC,
+          b.id DESC
+
         LIMIT $1
       `,
       [safeLimit],

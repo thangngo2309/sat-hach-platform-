@@ -11,6 +11,8 @@ import { ReceivedFilesPanel } from "@/components/file-submissions/ReceivedFilesP
 
 import { IndependentExamWorkspace } from "@/components/independent-exams/IndependentExamWorkspace";
 
+import { ExamSessionSecretaryWorkspace } from "@/components/examination-sessions/ExamSessionSecretaryWorkspace";
+
 export default function RoleWorkspacePage() {
   const { user } = useAuth();
 
@@ -29,6 +31,7 @@ export default function RoleWorkspacePage() {
     case "pc08_staff":
       return (
         <Stack spacing={3}>
+          <ExamSessionSecretaryWorkspace />
           <ReceivedFilesPanel />
           <FileSubmissionsWorkspace />
           <ExamImportStatusPanel />
@@ -45,7 +48,12 @@ export default function RoleWorkspacePage() {
       );
 
     case "exam_secretary":
-      return <IndependentExamWorkspace />;
+      return (
+        <Stack spacing={3}>
+          <ExamSessionSecretaryWorkspace />
+          <IndependentExamWorkspace />
+        </Stack>
+      );
 
     default:
       return <Alert severity="error">Tài khoản không có quyền truy cập.</Alert>;

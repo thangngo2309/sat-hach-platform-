@@ -79,6 +79,8 @@ import { AdministrativeDivisionsService } from './business/administrative-divisi
 import { StudentScanService } from './business/students/student-scan.service.js';
 import { ExaminationSessionsController } from './business/examination-sessions/examination-sessions.controller.js';
 import { ExaminationSessionsService } from './business/examination-sessions/examination-sessions.service.js';
+import { ExaminationSessionSecretariesController } from './business/examination-sessions/examination-session-secretaries.controller.js';
+import { ExaminationSessionSecretariesService } from './business/examination-sessions/examination-session-secretaries.service.js';
 
 const businessEntities = [
   User,
@@ -146,7 +148,8 @@ const businessEntities = [
     IndependentExamAssignmentController,
     FileSubmissionReviewController,
     AdministrativeDivisionsController,
-    ExaminationSessionsController
+    ExaminationSessionsController,
+    ExaminationSessionSecretariesController
   ],
 
   providers: [
@@ -179,7 +182,8 @@ const businessEntities = [
     FileSubmissionReviewService,
     AdministrativeDivisionsService,
     StudentScanService,
-    ExaminationSessionsService
+    ExaminationSessionsService,
+    ExaminationSessionSecretariesService
   ],
 })
 export class AppModule {}

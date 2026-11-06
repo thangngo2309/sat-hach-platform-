@@ -2,17 +2,10 @@ import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 
 import { AuthProvider } from "@/components/auth/AuthProvider";
+import { MuiFontProvider } from "@/components/layouts/MuiFontProvider";
 
 import "./globals.css";
 
-/**
- * Font Inter dùng chung cho toàn bộ website.
- *
- * Next.js tự quản lý font và cung cấp file font
- * từ ứng dụng khi triển khai production.
- *
- * Đồng bộ hiển thị giữa macOS và Windows.
- */
 const inter = Inter({
   subsets: ["latin", "vietnamese"],
   display: "swap",
@@ -33,7 +26,9 @@ export default function RootLayout({
   return (
     <html lang="vi">
       <body className={inter.variable}>
-        <AuthProvider>{children}</AuthProvider>
+        <MuiFontProvider fontFamily={inter.style.fontFamily}>
+          <AuthProvider>{children}</AuthProvider>
+        </MuiFontProvider>
       </body>
     </html>
   );
