@@ -242,26 +242,31 @@ export class ExamFileApprovalService {
     result: ImportResult,
   ): Promise<void> {
     await this.db.transaction(async (manager) => {
+      /**
+       * 1. Đánh dấu file đã được duyệt
+       * và import thành công.
+       */
       const updated: Array<{ id: number }> = await manager.query(
         `
-            UPDATE file_submissions
-            SET
-              status = 'approved',
-              import_status = 'completed',
-              import_batch_id = $3,
-              import_result = $4::jsonb,
-              import_error = NULL,
-              reviewed_by_user_id = $2,
-              reviewed_at = NOW(),
-              import_completed_at = NOW(),
-              processing_started_at = NULL,
-              updated_at = NOW()
-            WHERE id = $1
-              AND status = 'processing'
-              AND current_version = $5
-              AND examination_session_id = $6
-            RETURNING id
-          `,
+          UPDATE file_submissions
+          SET
+            status = 'approved',
+            import_status = 'completed',
+            import_batch_id = $3,
+            import_result = $4::jsonb,
+            import_error = NULL,
+            reviewed_by_user_id = $2,
+            reviewed_at = NOW(),
+            import_completed_at = NOW(),
+            processing_started_at = NULL,
+            updated_at = NOW()
+          WHERE id = $1
+            AND status = 'processing'
+            AND current_version = $5
+            AND examination_session_id
+                IS NOT DISTINCT FROM $6::integer
+          RETURNING id
+        `,
         [
           source.id,
           reviewerId,
@@ -278,6 +283,115 @@ export class ExamFileApprovalService {
         );
       }
 
+      /**
+       * 2. Riêng file KQSH:
+       * Duyệt và import thành công => hoàn tất kỳ.
+       *
+       * Không áp dụng cho BC1, BC2 hoặc 48_.
+       */
+      if (source.fileType === 'exam_result') {
+        const sessionCode =
+          typeof result.sessionCode === 'string'
+            ? result.sessionCode.trim()
+            : '';
+
+        if (!sessionCode) {
+          throw new ConflictException(
+            'KQSH import thành công nhưng không trả về mã kỳ sát hạch.',
+          );
+        }
+
+        /**
+         * Xác minh kỳ chính thức từ kết quả import,
+         * đồng thời đối chiếu với kỳ và TTSH
+         * được liên kết ở file_submissions.
+         */
+        const sessions: Array<{
+          id: number;
+          completedAt: Date | null;
+        }> = await manager.query(
+          `
+          SELECT
+            es.id,
+            es.completed_at AS "completedAt"
+          FROM examination_sessions es
+          WHERE UPPER(TRIM(es.official_code)) =
+                UPPER(TRIM($1::text))
+            AND (
+              $2::integer IS NULL
+              OR es.id = $2::integer
+            )
+            AND (
+              $3::integer IS NULL
+              OR es.examination_center_id = $3::integer
+            )
+          FOR UPDATE
+        `,
+          [
+            sessionCode,
+            source.examinationSessionId,
+            source.examinationCenterId,
+          ],
+        );
+
+        if (sessions.length !== 1) {
+          throw new ConflictException(
+            'Không xác định được duy nhất kỳ sát hạch ' +
+              'tương ứng với KQSH đã import.',
+          );
+        }
+
+        const sessionId = Number(sessions[0].id);
+
+        /**
+         * Chỉ ghi thời gian hoàn tất lần đầu.
+         *
+         * Nếu PC08 đã xác nhận kỳ trước đó,
+         * giữ nguyên thông tin xác nhận cũ.
+         */
+        await manager.query(
+          `
+          UPDATE examination_sessions
+          SET
+            completed_by_user_id = CASE
+              WHEN completed_at IS NULL
+                THEN $2
+              ELSE completed_by_user_id
+            END,
+            completed_at = COALESCE(
+              completed_at,
+              NOW()
+            ),
+            updated_at = NOW()
+          WHERE id = $1
+        `,
+          [sessionId, reviewerId],
+        );
+
+        /**
+         * Ghi lịch sử tự động hoàn tất kỳ.
+         */
+        await this.addEvent(
+          manager,
+          source.id,
+          reviewerId,
+          'exam_session_completed',
+          {
+            examinationSessionId: sessionId,
+            sessionCode,
+            importBatchId: result.id,
+            completedBy: 'exam_result_approval',
+            alreadyCompleted: Boolean(sessions[0].completedAt),
+          },
+        );
+      }
+
+      /**
+       * 3. Ghi lịch sử duyệt hồ sơ.
+       *
+       * Các thay đổi file và trạng thái kỳ
+       * cùng nằm trong transaction này.
+       */
       await this.addEvent(manager, source.id, reviewerId, 'approved', {
         fileType: source.fileType,
         examinationSessionId: source.examinationSessionId,
@@ -554,10 +668,31 @@ export class ExamFileApprovalService {
    * Giữ nguyên response để không làm
    * ảnh hưởng các panel trạng thái hiện có.
    */
-  async approve(user: AuthUser, id: number): Promise<ImportOutcome> {
+  async approve(
+    user: AuthUser,
+    id: number,
+    selectedFileIds?: number[],
+  ): Promise<ImportOutcome> {
     this.assertSuperAdmin(user);
 
     const source = await this.loadSource(id);
+
+    if (source.fileType === 'exam_48') {
+      if (!Array.isArray(selectedFileIds)) {
+        throw new BadRequestException(
+          'Vui lòng chọn danh sách BC1, BC2 trước khi duyệt file 48_.',
+        );
+      }
+
+      if (
+        selectedFileIds.length > 500 ||
+        selectedFileIds.some(
+          (fileId) => !Number.isSafeInteger(fileId) || fileId <= 0,
+        )
+      ) {
+        throw new BadRequestException('Danh sách BC1, BC2 không hợp lệ.');
+      }
+    }
 
     if (source.status !== 'pending') {
       throw new ConflictException('Hồ sơ không còn ở trạng thái chờ duyệt.');

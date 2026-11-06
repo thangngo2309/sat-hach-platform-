@@ -18,6 +18,7 @@ import {
   parseDocumentMetadata,
   type DocumentMetadata,
 } from './file-document-metadata.js';
+import { FileSubmissionXmlLinkService } from './file-submission-xml-link.service.js';
 
 export const FILE_TYPES = [
   'bc1',
@@ -295,6 +296,7 @@ export class FileSubmissionsService {
   constructor(
     @InjectDataSource()
     private readonly db: DataSource,
+    private readonly xmlLinks: FileSubmissionXmlLinkService,
   ) {}
 
   private async validateExaminationSession(
@@ -304,55 +306,59 @@ export class FileSubmissionsService {
     centerId: number | null,
     user: AuthUser,
   ): Promise<number | null> {
-    if (type === 'bc1') {
+    /**
+     * BC1, BC2 và 48_ chưa có kỳ sát hạch.
+     * Kỳ sẽ được tạo khi SUPER_ADMIN duyệt 48_.
+     */
+    if (type === 'bc1' || type === 'bc2' || type === 'exam_48') {
+      if (sessionIdRaw) {
+        throw new BadRequestException(
+          'Loại hồ sơ này không chọn kỳ sát hạch khi gửi.',
+        );
+      }
+
       return null;
     }
 
+    /**
+     * KQSH được xác định bằng MAKYSH trong XML.
+     * Hàm này không xử lý KQSH nữa.
+     */
+    if (type === 'exam_result') {
+      throw new BadRequestException(
+        'Kỳ sát hạch của KQSH phải được xác định từ XML.',
+      );
+    }
+
+    /**
+     * Giữ nguyên cơ chế chọn kỳ đối với BC2_RESULT
+     * vì đây là nghiệp vụ khác.
+     */
     const sessionId = parsePositiveId(sessionIdRaw, 'Kỳ sát hạch');
 
     const rows: Array<{
       id: number;
       examinationCenterId: number;
-      examDate: string | null;
     }> = await this.db.query(
       `
-      SELECT
-        id,
-        examination_center_id AS "examinationCenterId",
-        exam_date::text AS "examDate"
-      FROM examination_sessions
-      WHERE id = $1
-      LIMIT 1
-    `,
+        SELECT
+          id,
+          examination_center_id AS "examinationCenterId"
+        FROM examination_sessions
+        WHERE id = $1
+        LIMIT 1
+      `,
       [sessionId],
     );
 
     if (!rows.length) {
-      throw new BadRequestException(
-        'Kỳ sát hạch không tồn tại. Vui lòng tạo kỳ trước.',
-      );
+      throw new BadRequestException('Kỳ sát hạch không tồn tại.');
     }
 
-    const session = rows[0];
-
-    /**
-     * File do TTSH gửi phải thuộc đúng TTSH đó.
-     * File 48_ do PC08 gửi phải khớp TTSH đã chọn.
-     */
-    if (centerId !== null && Number(session.examinationCenterId) !== centerId) {
-      throw new BadRequestException(
-        'Trung tâm sát hạch không khớp kỳ đã chọn.',
-      );
+    if (centerId !== null && Number(rows[0].examinationCenterId) !== centerId) {
+      throw new BadRequestException('TTSH không khớp kỳ sát hạch.');
     }
 
-    /**
-     * CSĐT có thể gửi BC2 cho cùng một kỳ
-     * với nhiều CSĐT khác.
-     *
-     * Không giới hạn một kỳ chỉ có một schoolId.
-     * schoolId sẽ tiếp tục được lưu độc lập
-     * trong file_submissions.
-     */
     if (user.role === UserRole.TRAINING_SCHOOL && schoolId === null) {
       throw new BadRequestException('Tài khoản chưa được gắn cơ sở đào tạo.');
     }
@@ -479,25 +485,86 @@ export class FileSubmissionsService {
     type: FileType,
     metadata: DocumentMetadata,
     centerId: number | null,
+    resolvedSessionId?: number | null,
   ): Promise<void> {
     if (type !== 'exam_result') return;
-    if (!centerId)
+
+    if (!centerId) {
       throw new BadRequestException('Tài khoản chưa được gắn TTSH.');
-    const rows: Array<{ id: number; examDate: string }> = await this.db.query(
+    }
+
+    if (!resolvedSessionId) {
+      throw new BadRequestException('Không xác định được kỳ sát hạch từ KQSH.');
+    }
+
+    const rows: Array<{
+      id: number;
+      examDate: string | null;
+      centerId: number;
+    }> = await this.db.query(
       `
-      SELECT id, exam_date::text AS "examDate"
-      FROM examination_sessions
-      WHERE id = $1 AND examination_center_id = $2
-    `,
-      [Number(metadata.examinationSessionId), centerId],
+        SELECT
+          id,
+          exam_date::text AS "examDate",
+          examination_center_id AS "centerId"
+        FROM examination_sessions
+        WHERE id = $1
+          AND examination_center_id = $2
+        LIMIT 1
+      `,
+      [resolvedSessionId, centerId],
     );
-    if (!rows.length)
+
+    if (!rows.length) {
       throw new BadRequestException(
         'Kỳ sát hạch không thuộc TTSH của tài khoản.',
       );
-    if (rows[0].examDate.slice(0, 10) !== metadata.examinationDate) {
-      throw new BadRequestException('Ngày sát hạch không khớp kỳ đã chọn.');
     }
+
+    const actualDate = rows[0].examDate?.slice(0, 10) ?? '';
+
+    if (!actualDate || actualDate !== metadata.examinationDate) {
+      throw new BadRequestException(
+        'Ngày sát hạch của KQSH không khớp kỳ đã xác định.',
+      );
+    }
+
+    if (Number(metadata.examinationSessionId) !== resolvedSessionId) {
+      throw new BadRequestException('Metadata KQSH không khớp kỳ sát hạch.');
+    }
+  }
+
+  private parseUploadMetadata(
+    type: FileType,
+    rawMetadata: string | undefined,
+    verifiedMetadata: Record<string, string>,
+  ): DocumentMetadata {
+    let supplied: Record<string, unknown>;
+
+    try {
+      const parsed = JSON.parse(rawMetadata || '{}');
+
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw new Error('Invalid metadata');
+      }
+
+      supplied = parsed as Record<string, unknown>;
+    } catch {
+      throw new BadRequestException(
+        'Thông tin khai báo không đúng định dạng JSON.',
+      );
+    }
+
+    /**
+     * Metadata đã xác minh từ XML luôn
+     * ghi đè dữ liệu người gửi tự khai báo.
+     */
+    const merged = {
+      ...supplied,
+      ...verifiedMetadata,
+    };
+
+    return parseDocumentMetadata(type, JSON.stringify(merged));
   }
 
   private async validateScope(
@@ -812,19 +879,72 @@ export class FileSubmissionsService {
         throw new BadRequestException('Vui lòng chọn file.');
       }
 
+      /**
+       * 1. Xác thực người gửi và đơn vị.
+       *
+       * CSĐT: BC1, BC2.
+       * PC08: 48_, BC2_RESULT.
+       * TTSH: KQSH.
+       */
       const scope = await this.validateScope(user, type, input);
 
-      const examinationSessionId = await this.validateExaminationSession(
+      /**
+       * 2. Đọc XML và xác định liên kết.
+       *
+       * BC1: xác minh MA_CSDT.
+       * BC2: MA_BCI + MA_CSDT + MA_DK.
+       * 48_: MAKYSH + MATTSH, chưa tạo kỳ.
+       * KQSH: MAKYSH -> kỳ đã được duyệt.
+       *
+       * BC2_RESULT giữ cơ chế hiện có.
+       */
+      const resolved = await this.xmlLinks.resolve(
         type,
-        input.examinationSessionId,
         scope.schoolId,
         scope.centerId,
-        user,
+        input.examinationSessionId,
+        uploadedFile,
       );
 
-      const metadata = parseDocumentMetadata(type, input.documentMetadata);
-      await this.validateMetadataSession(type, metadata, scope.centerId);
+      let examinationSessionId = resolved.examinationSessionId;
 
+      if (type === 'bc2_result') {
+        examinationSessionId = await this.validateExaminationSession(
+          type,
+          input.examinationSessionId,
+          scope.schoolId,
+          scope.centerId,
+          user,
+        );
+      }
+
+      /**
+       * 3. Metadata từ XML có độ ưu tiên cao nhất.
+       *
+       * Không tin examinationSessionId do FE gửi
+       * đối với KQSH.
+       */
+      const metadata = this.parseUploadMetadata(
+        type,
+        input.documentMetadata,
+        resolved.metadata,
+      );
+
+      /**
+       * 4. Kiểm tra TTSH và ngày sát hạch
+       * đã xác minh từ XML.
+       */
+      await this.validateMetadataSession(
+        type,
+        metadata,
+        scope.centerId,
+        examinationSessionId,
+      );
+
+      /**
+       * 5. Người phụ trách KQSH bắt buộc
+       * phải là tài khoản IT PC08 hợp lệ.
+       */
       const storedMetadata =
         type === 'exam_result'
           ? {
@@ -835,22 +955,29 @@ export class FileSubmissionsService {
 
       const note = input.note?.trim().slice(0, 2000) || null;
 
+      /**
+       * 6. Chỉ lưu file sau khi đã xác minh XML.
+       */
       stored = await this.prepareStoredFile(uploadedFile);
 
-      const result = await this.db.transaction(async (manager) => {
+      /**
+       * 7. Tạo hồ sơ, phiên bản và sự kiện
+       * trong cùng transaction PostgreSQL.
+       */
+      const submissionId = await this.db.transaction(async (manager) => {
         const created: Array<{ id: number }> = await manager.query(
           `
-            INSERT INTO file_submissions (
-              file_type,
-              uploaded_by_user_id,
-              training_school_id,
-              examination_center_id,
-              examination_session_id,
-              note
-            )
-            VALUES ($1, $2, $3, $4, $5, $6)
-            RETURNING id
-          `,
+              INSERT INTO file_submissions (
+                file_type,
+                uploaded_by_user_id,
+                training_school_id,
+                examination_center_id,
+                examination_session_id,
+                note
+              )
+              VALUES ($1, $2, $3, $4, $5, $6)
+              RETURNING id
+            `,
           [
             type,
             user.sub,
@@ -861,7 +988,7 @@ export class FileSubmissionsService {
           ],
         );
 
-        const submissionId = created[0].id;
+        const id = Number(created[0].id);
 
         await manager.query(
           `
@@ -877,11 +1004,12 @@ export class FileSubmissionsService {
               document_metadata
             )
             VALUES (
-              $1, 1, $2, $3, $4, $5, $6, $7, $8::jsonb
+              $1, 1, $2, $3, $4, $5, $6, $7,
+              $8::jsonb
             )
           `,
           [
-            submissionId,
+            id,
             stored!.originalName,
             stored!.storageKey,
             stored!.mimeType,
@@ -892,18 +1020,39 @@ export class FileSubmissionsService {
           ],
         );
 
-        await this.addEvent(manager, submissionId, user.sub, 'created', {
+        await this.addEvent(manager, id, user.sub, 'created', {
           fileType: type,
           filename: stored!.originalName,
+          examinationSessionId,
           documentMetadata: storedMetadata,
         });
 
-        return submissionId;
+        /**
+         * Ghi nhận thông tin liên kết XML
+         * để phục vụ kiểm tra lịch sử.
+         *
+         * Không tạo kỳ và không import ở đây.
+         */
+        if (type === 'bc2' || type === 'exam_48' || type === 'exam_result') {
+          await this.addEvent(manager, id, user.sub, 'xml_link_verified', {
+            fileType: type,
+            examinationSessionId,
+            verifiedMetadata: resolved.metadata,
+          });
+        }
+
+        return id;
       });
 
       stored = null;
-      return this.findOne(result);
+
+      return this.findOne(submissionId);
     } finally {
+      /**
+       * Dọn file upload tạm.
+       * Nếu DB transaction thất bại,
+       * dọn file đã chuyển vào storage.
+       */
       if (uploadedFile?.path) {
         await unlink(uploadedFile.path).catch(() => undefined);
       }
@@ -939,11 +1088,90 @@ export class FileSubmissionsService {
         throw new ConflictException('Chỉ được thay file khi chưa được duyệt.');
       }
 
-      const metadata = parseDocumentMetadata(submission.fileType, rawMetadata);
+      /**
+       * 1. Đọc phiên bản XML hiện tại.
+       *
+       * Không sử dụng storageKey do FE truyền.
+       */
+      const existingVersions: Array<{
+        storageKey: string;
+      }> = await this.db.query(
+        `
+        SELECT
+          storage_key AS "storageKey"
+        FROM file_submission_versions
+        WHERE submission_id = $1
+          AND version = $2
+        LIMIT 1
+      `,
+        [id, submission.currentVersion],
+      );
+
+      if (!existingVersions.length) {
+        throw new NotFoundException('Không tìm thấy phiên bản hiện tại.');
+      }
+
+      /**
+       * 2. Chặn việc thay XML bằng hồ sơ
+       * mang mã nghiệp vụ khác.
+       *
+       * BC1: MA_CSDT + MA_BCI + MA_KHOA_HOC.
+       * BC2: MA_CSDT + MA_BCI + MA_BCII.
+       * 48_: MAKYSH + MATTSH.
+       */
+      await this.xmlLinks.assertSameDocument(
+        submission.fileType,
+        existingVersions[0].storageKey,
+        uploadedFile,
+      );
+
+      /**
+       * 3. Xác minh lại dữ liệu XML mới.
+       */
+      const resolved = await this.xmlLinks.resolve(
+        submission.fileType,
+        submission.trainingSchoolId,
+        submission.examinationCenterId,
+        submission.fileType === 'bc2_result'
+          ? String(submission.examinationSessionId ?? '')
+          : undefined,
+        uploadedFile,
+      );
+
+      let resolvedSessionId = resolved.examinationSessionId;
+
+      if (submission.fileType === 'bc2_result') {
+        resolvedSessionId = submission.examinationSessionId;
+      }
+
+      /**
+       * 4. Không cho chuyển một hồ sơ
+       * sang kỳ khác bằng thao tác thay file.
+       */
+      if (resolvedSessionId !== submission.examinationSessionId) {
+        throw new ConflictException(
+          'File thay thế thuộc kỳ sát hạch khác. ' +
+            'Vui lòng gửi một hồ sơ mới.',
+        );
+      }
+
+      /**
+       * 5. Xây dựng lại metadata.
+       *
+       * Các giá trị được kiểm tra từ XML
+       * phải ghi đè dữ liệu do FE gửi.
+       */
+      const metadata = this.parseUploadMetadata(
+        submission.fileType,
+        rawMetadata,
+        resolved.metadata,
+      );
+
       await this.validateMetadataSession(
         submission.fileType,
         metadata,
         submission.examinationCenterId,
+        resolvedSessionId,
       );
 
       const storedMetadata =
@@ -954,23 +1182,31 @@ export class FileSubmissionsService {
             }
           : metadata;
 
+      /**
+       * 6. Kiểm tra file và lưu vật lý.
+       */
       stored = await this.prepareStoredFile(uploadedFile);
 
+      /**
+       * 7. Thay phiên bản bên trong transaction.
+       */
       await this.db.transaction(async (manager) => {
         const locked: Array<{
           status: SubmissionStatus;
           current_version: number;
           uploaded_by_user_id: number;
+          examination_session_id: number | null;
         }> = await manager.query(
           `
-            SELECT
-              status,
-              current_version,
-              uploaded_by_user_id
-            FROM file_submissions
-            WHERE id = $1
-            FOR UPDATE
-          `,
+          SELECT
+            status,
+            current_version,
+            uploaded_by_user_id,
+            examination_session_id
+          FROM file_submissions
+          WHERE id = $1
+          FOR UPDATE
+        `,
           [id],
         );
 
@@ -984,25 +1220,36 @@ export class FileSubmissionsService {
           );
         }
 
+        if (Number(locked[0].current_version) !== submission.currentVersion) {
+          throw new ConflictException(
+            'Phiên bản hồ sơ đã thay đổi. Vui lòng tải lại.',
+          );
+        }
+
+        if (locked[0].examination_session_id !== resolvedSessionId) {
+          throw new ConflictException('Liên kết kỳ sát hạch đã thay đổi.');
+        }
+
         const nextVersion = Number(locked[0].current_version) + 1;
 
         await manager.query(
           `
-            INSERT INTO file_submission_versions (
-              submission_id,
-              version,
-              original_name,
-              storage_key,
-              mime_type,
-              size_bytes,
-              sha256,
-              uploaded_by_user_id,
-              document_metadata
-            )
-            VALUES (
-              $1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb
-            )
-          `,
+          INSERT INTO file_submission_versions (
+            submission_id,
+            version,
+            original_name,
+            storage_key,
+            mime_type,
+            size_bytes,
+            sha256,
+            uploaded_by_user_id,
+            document_metadata
+          )
+          VALUES (
+            $1, $2, $3, $4, $5, $6, $7, $8,
+            $9::jsonb
+          )
+        `,
           [
             id,
             nextVersion,
@@ -1018,27 +1265,30 @@ export class FileSubmissionsService {
 
         await manager.query(
           `
-            UPDATE file_submissions
-            SET current_version = $2,
-                import_status = 'not_processed',
-                import_error = NULL,
-                import_result = NULL,
-                import_batch_id = NULL,
-                import_completed_at = NULL,
-                updated_at = NOW()
-            WHERE id = $1
-          `,
+          UPDATE file_submissions
+          SET
+            current_version = $2,
+            import_status = 'not_processed',
+            import_error = NULL,
+            import_result = NULL,
+            import_batch_id = NULL,
+            import_completed_at = NULL,
+            updated_at = NOW()
+          WHERE id = $1
+        `,
           [id, nextVersion],
         );
 
         await this.addEvent(manager, id, user.sub, 'version_uploaded', {
           version: nextVersion,
           filename: stored!.originalName,
+          examinationSessionId: resolvedSessionId,
           documentMetadata: storedMetadata,
         });
       });
 
       stored = null;
+
       return this.findOne(id);
     } finally {
       if (uploadedFile?.path) {

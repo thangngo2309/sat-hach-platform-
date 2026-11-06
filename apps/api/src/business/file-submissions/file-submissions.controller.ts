@@ -236,6 +236,7 @@ export class FileSubmissionsController {
     body: {
       action?: 'approve' | 'reject';
       reason?: string;
+      selectedFileIds?: number[];
     },
   ) {
     if (body?.action !== 'approve' && body?.action !== 'reject') {
@@ -252,7 +253,13 @@ export class FileSubmissionsController {
       return this.importService.approve(user, id);
     }
 
-    if (fileType === 'exam_48' || fileType === 'exam_result') {
+    if (fileType === 'exam_48') {
+      const selectedFileIds = [...new Set(body.selectedFileIds)];
+
+      return this.examApproval.approve(user, id, selectedFileIds);
+    }
+
+    if (fileType === 'exam_result') {
       return this.examApproval.approve(user, id);
     }
 

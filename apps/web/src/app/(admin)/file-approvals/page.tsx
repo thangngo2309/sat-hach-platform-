@@ -49,6 +49,7 @@ import {
   type FileSubmission,
   type SubmissionStatus,
 } from "@/lib/file-submissions";
+import { Exam48ApprovalDialog } from "@/components/file-submissions/Exam48ApprovalDialog";
 
 type FilterStatus = Exclude<SubmissionStatus, "processing"> | "all";
 
@@ -124,6 +125,8 @@ export default function FileApprovalsPage() {
 
   const [viewing, setViewing] = useState<FileSubmission | null>(null);
 
+  const [exam48Target, setExam48Target] = useState<FileSubmission | null>(null);
+
   const load = useCallback(async () => {
     if (!accessToken || user?.role !== "super_admin") {
       return;
@@ -170,9 +173,21 @@ export default function FileApprovalsPage() {
   async function review(
     file: FileSubmission,
     action: "approve" | "reject",
-    reasonText?: string
+    reasonText?: string,
+    selectedFileIds?: number[]
   ) {
     if (!accessToken || savingId !== null) return;
+
+    // Không cho file 48_ đi qua luồng duyệt thường.
+    if (
+      file.fileType === "exam_48" &&
+      action === "approve" &&
+      selectedFileIds === undefined
+    ) {
+      setExam48Target(file);
+      setViewing(null);
+      return;
+    }
 
     setSavingId(file.id);
     setError("");
@@ -183,31 +198,41 @@ export default function FileApprovalsPage() {
         accessToken,
         file.id,
         action,
-        reasonText
+        reasonText,
+        selectedFileIds
       );
 
       if (response.importStatus === "failed") {
-        setError(
-          `Hồ sơ #${file.id} xử lý không thành công: ` +
-            (response.importError || "Không rõ nguyên nhân.")
-        );
-      } else if (action === "reject") {
-        setSuccess(`Đã từ chối hồ sơ #${file.id}.`);
-      } else if (response.importStatus === "completed") {
-        setSuccess(`Đã duyệt và import thành công hồ sơ #${file.id}.`);
-      } else {
-        setSuccess(
-          `Đã phê duyệt hồ sơ #${file.id}. ` +
-            "File đã được lưu để xử lý hoặc phân phối."
+        throw new Error(
+          response.importError || `Hồ sơ #${file.id} import không thành công.`
         );
       }
 
+      if (action === "reject") {
+        setSuccess(`Đã từ chối hồ sơ #${file.id}.`);
+      } else if (file.fileType === "exam_48") {
+        setSuccess(
+          `Đã duyệt file 48_ #${file.id}, ` +
+            "tạo kỳ sát hạch và liên kết hồ sơ thành công."
+        );
+      } else if (response.importStatus === "completed") {
+        setSuccess(`Đã duyệt và import hồ sơ #${file.id}.`);
+      } else {
+        setSuccess(`Đã phê duyệt hồ sơ #${file.id}.`);
+      }
+
+      setExam48Target(null);
       setRejecting(null);
       setViewing(null);
       setReason("");
+
       setReload((value) => value + 1);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Không thể xử lý hồ sơ.");
+      const message =
+        err instanceof Error ? err.message : "Không thể xử lý hồ sơ.";
+
+      setError(message);
+      throw err;
     } finally {
       setSavingId(null);
     }
@@ -686,6 +711,23 @@ export default function FileApprovalsPage() {
           </Button>
         </DialogActions>
       </Dialog>
+
+      <Exam48ApprovalDialog
+        open={exam48Target !== null}
+        file={exam48Target}
+        accessToken={accessToken}
+        saving={savingId !== null}
+        onClose={() => {
+          if (savingId === null) {
+            setExam48Target(null);
+          }
+        }}
+        onConfirm={async (selectedFileIds) => {
+          if (!exam48Target) return;
+
+          await review(exam48Target, "approve", undefined, selectedFileIds);
+        }}
+      />
     </Stack>
   );
 }

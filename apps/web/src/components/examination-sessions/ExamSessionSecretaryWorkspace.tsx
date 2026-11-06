@@ -48,6 +48,7 @@ import {
   type ExamSessionSecretaryDetail,
   type ExamSessionSecretaryOption,
 } from "@/lib/examination-session-secretaries";
+import { ExamSessionScanDialog } from "./ExamSessionScanDialog";
 
 function dateText(value: string | null): string {
   if (!value) return "—";
@@ -86,6 +87,10 @@ export function ExamSessionSecretaryWorkspace() {
 
   const [trackingTarget, setTrackingTarget] =
     useState<ExamSessionSecretary | null>(null);
+
+  const [scanTarget, setScanTarget] = useState<ExamSessionSecretary | null>(
+    null
+  );
 
   const [detail, setDetail] = useState<ExamSessionSecretaryDetail | null>(null);
 
@@ -463,6 +468,14 @@ export function ExamSessionSecretaryWorkspace() {
                           Mã theo dõi
                         </Button>
                       )}
+
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        onClick={() => setScanTarget(item)}
+                      >
+                        Hồ sơ scan
+                      </Button>
                     </Stack>
                   </TableCell>
                 </TableRow>
@@ -699,6 +712,16 @@ export function ExamSessionSecretaryWorkspace() {
           <Button onClick={() => setDetail(null)}>Đóng</Button>
         </DialogActions>
       </Dialog>
+      
+      <ExamSessionScanDialog
+        open={scanTarget !== null}
+        sessionId={scanTarget?.id ?? null}
+        sessionCode={scanTarget?.code ?? ""}
+        completed={Boolean(scanTarget?.completedAt)}
+        canUpload={isSecretary}
+        accessToken={accessToken}
+        onClose={() => setScanTarget(null)}
+      />
     </Stack>
   );
 }

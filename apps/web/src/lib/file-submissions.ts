@@ -73,6 +73,43 @@ export interface FileSubmissionReviewResult {
   importBatchId?: number | null;
 }
 
+export interface Exam48LinkOption {
+  id: number;
+  fileType: "bc1" | "bc2";
+  fileName: string;
+  schoolId: number | null;
+  schoolCode: string | null;
+  schoolName: string | null;
+  importBatchId: number | null;
+  importStatus: string;
+  examinationSessionId: number | null;
+  reportCode: string | null;
+  createdAt: string;
+  suggested: boolean;
+}
+
+export interface Exam48ApprovalOptions {
+  submissionId: number;
+  session: {
+    code: string;
+    examinationCenterCode: string;
+    examDate: string | null;
+    examTime: string | null;
+    decisionNumber: string | null;
+    totalCandidates: number;
+  };
+  candidateSchoolCodes: string[];
+  files: Exam48LinkOption[];
+}
+
+export function getExam48ApprovalOptions(token: string, submissionId: number) {
+  return apiRequest<Exam48ApprovalOptions>(
+    `/exam48-approval/${submissionId}/options`,
+    { method: "GET" },
+    token
+  );
+}
+
 export interface ExamSessionOption {
   id: number;
   code: string;
@@ -259,13 +296,20 @@ export function reviewFileSubmission(
   token: string,
   id: number,
   action: "approve" | "reject",
-  reason?: string
+  reason?: string,
+  selectedFileIds?: number[]
 ) {
   return apiRequest<FileSubmissionReviewResult>(
     `/file-submissions/${id}/review`,
     {
       method: "POST",
-      body: JSON.stringify({ action, reason }),
+      body: JSON.stringify({
+        action,
+        reason,
+        ...(action === "approve" && selectedFileIds !== undefined
+          ? { selectedFileIds }
+          : {}),
+      }),
     },
     token
   );

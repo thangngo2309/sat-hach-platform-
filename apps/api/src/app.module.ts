@@ -81,6 +81,11 @@ import { ExaminationSessionsController } from './business/examination-sessions/e
 import { ExaminationSessionsService } from './business/examination-sessions/examination-sessions.service.js';
 import { ExaminationSessionSecretariesController } from './business/examination-sessions/examination-session-secretaries.controller.js';
 import { ExaminationSessionSecretariesService } from './business/examination-sessions/examination-session-secretaries.service.js';
+import { Exam48ApprovalOptionsController } from './business/file-submissions/exam48-approval-options.controller.js';
+import { Exam48ApprovalOptionsService } from './business/file-submissions/exam48-approval-options.service.js';
+import { FileSubmissionXmlLinkService } from './business/file-submissions/file-submission-xml-link.service.js';
+import { ExaminationSessionScansController } from './business/examination-sessions/examination-session-scans.controller.js';
+import { ExaminationSessionScansService } from './business/examination-sessions/examination-session-scans.service.js';
 
 const businessEntities = [
   User,
@@ -149,7 +154,9 @@ const businessEntities = [
     FileSubmissionReviewController,
     AdministrativeDivisionsController,
     ExaminationSessionsController,
-    ExaminationSessionSecretariesController
+    ExaminationSessionSecretariesController,
+    Exam48ApprovalOptionsController,
+    ExaminationSessionScansController
   ],
 
   providers: [
@@ -183,7 +190,10 @@ const businessEntities = [
     AdministrativeDivisionsService,
     StudentScanService,
     ExaminationSessionsService,
-    ExaminationSessionSecretariesService
+    ExaminationSessionSecretariesService,
+    Exam48ApprovalOptionsService,
+    FileSubmissionXmlLinkService,
+    ExaminationSessionScansService
   ],
 })
 export class AppModule {}
